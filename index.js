@@ -18,10 +18,10 @@ let pendingBets = [];
 let results = [];
 
 // 🎯 paramètres adaptatifs
-let minShots = 6;
-let minOnTarget = 3;
-let minPossession = 55;
-let minXG = 1;
+let minShots = 5;
+let minOnTarget = 2;
+let minPossession = 51;
+let minXG = 0.5;
 
 // 📊 PROBA + MISE
 function getPredictionLevel(score, homeXG) {
@@ -178,7 +178,7 @@ function analyseMatch(match) {
     return null;
 }
 
-// 🤖 BOT
+// 🤖 BOT - Analyse mi-temps
 setInterval(async () => {
 
     const matches = await getMatches();
@@ -285,3 +285,146 @@ setInterval(() => {
     console.log("xG:", minXG);
 
 }, 600000);
+
+// ============================================================
+// 📅 RÉCAP QUOTIDIEN 10H — MATCHS DU JOUR AVEC COTES V1 / Ve
+// ============================================================
+
+// 📡 Récupère les matchs du jour
+async function getMatchesOfDay() {
+    try {
+        const today = new Date().toISOString().split('T')[0]; // format YYYY-MM-DD
+        const response = await axios.get(
+            `https://v3.football.api-sports.io/fixtures?date=${today}`,
+            {
+                headers: { 'x-apisports-key': apiKey }
+            }
+        );
+        return response.data.response;
+    } catch (err) {
+        console.log("Erreur getMatchesOfDay :", err.message);
+        return [];
+    }
+}
+
+// 📡 Récupère les cotes d'un match (bookmaker = 1 → bet365 par défaut)
+async function getOdds(fixtureId) {
+    try {
+        const response = await axios.get(
+            `https://v3.football.api-sports.io/odds?fixture=${fixtureId}&bookmaker=1`,
+            {
+                headers: { 'x-apisports-key': apiKey }
+            }
+        );
+
+        const data = response.data.response;
+        if (!data || data.length === 0) return null;
+
+        // On cherche le marché "Match Winner" (1X2)
+        const bookmaker = data[0]?.bookmakers?.[0];
+        if (!bookmaker) return null;
+
+        const market = bookmaker.bets.find(b => b.name === "Match Winner");
+        if (!market) return null;
+
+        const v1 = parseFloat(market.values.find(v => v.value === "Home")?.odd);
+        const vN = parseFloat(market.values.find(v => v.value === "Draw")?.odd);
+        const ve = parseFloat(market.values.find(v => v.value === "Away")?.odd);
+
+        return { v1, vN, ve };
+    } catch (err) {
+        console.log(`Erreur cotes fixture ${fixtureId} :`, err.message);
+        return null;
+    }
+}
+
+// 📨 Envoi du récap 10h
+async function sendDailyRecap() {
+    console.log("📅 Envoi du récap quotidien...");
+
+    const matches = await getMatchesOfDay();
+
+    if (matches.length === 0) {
+        bot.sendMessage(chatId, "📅 Aucun match trouvé pour aujourd'hui.");
+        return;
+    }
+
+    // On filtre les matchs avec les bonnes cotes
+    // V1 entre 1.90 et 2.50  →  match équilibré légèrement en faveur domicile
+    // Ve entre 2.10 et 4.00  →  victoire extérieure possible mais pas écrasante
+    const V1_MIN = 1.90;
+    const V1_MAX = 2.50;
+    const VE_MIN = 2.10;
+    const VE_MAX = 4.00;
+
+    let filteredMatches = [];
+
+    for (const match of matches) {
+        const fixtureId = match.fixture.id;
+        const home = match.teams.home.name;
+        const away = match.teams.away.name;
+        const league = match.league.name;
+        const country = match.league.country;
+
+        // Heure du match (UTC → on affiche telle quelle, Railway tourne en UTC)
+        const kickoff = new Date(match.fixture.date);
+        const timeStr = kickoff.toLocaleTimeString('fr-FR', {
+            hour: '2-digit',
+            minute: '2-digit',
+            timeZone: 'Europe/Paris'
+        });
+
+        const odds = await getOdds(fixtureId);
+
+        if (!odds) continue;
+
+        const { v1, vN, ve } = odds;
+
+        // Filtre sur les cotes
+        const v1Ok = v1 >= V1_MIN && v1 <= V1_MAX;
+        const veOk = ve >= VE_MIN && ve <= VE_MAX;
+
+        if (v1Ok && veOk) {
+            filteredMatches.push({ home, away, league, country, timeStr, v1, vN, ve });
+        }
+
+        // Petite pause pour ne pas surcharger l'API
+        await new Promise(r => setTimeout(r, 200));
+    }
+
+    if (filteredMatches.length === 0) {
+        bot.sendMessage(chatId, "📅 Aucun match ne correspond aux critères de cotes aujourd'hui (V1: 1.90-2.50 / Ve: 2.10-4.00).");
+        return;
+    }
+
+    // Construction du message
+    let msg = `📅 MATCHS DU JOUR — ${new Date().toLocaleDateString('fr-FR')}\n`;
+    msg += `🎯 Critères: V1 entre 1.90-2.50 | Ve entre 2.10-4.00\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    for (const m of filteredMatches) {
+        msg += `⚽ ${m.home} vs ${m.away}\n`;
+        msg += `🏆 ${m.league} (${m.country})\n`;
+        msg += `🕐 ${m.timeStr}\n`;
+        msg += `📊 V1: ${m.v1} | N: ${m.vN} | Ve: ${m.ve}\n`;
+        msg += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    }
+
+    msg += `🔢 Total: ${filteredMatches.length} match(s) sélectionné(s)`;
+
+    bot.sendMessage(chatId, msg);
+    console.log(`📅 Récap envoyé — ${filteredMatches.length} match(s)`);
+}
+
+// ⏰ Scheduler 10h00 (heure de Paris)
+// Vérifie toutes les minutes si on est à 10h00
+setInterval(() => {
+    const now = new Date();
+    const parisTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
+    const hours = parisTime.getHours();
+    const minutes = parisTime.getMinutes();
+
+    if (hours === 10 && minutes === 0) {
+        sendDailyRecap();
+    }
+}, 60000);
