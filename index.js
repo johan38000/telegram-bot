@@ -1,23 +1,23 @@
 require('dotenv').config();
- 
+
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const fs = require('fs');
- 
+
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const apiKey = process.env.API_KEY;
 const chatId = "1633310404";
- 
+
 const bot = new TelegramBot(token, { polling: true });
- 
+
 console.log("🔥 BOT FINAL LANCÉ");
- 
+
 // ============================================================
 // 💾 SAUVEGARDE / CHARGEMENT
 // ============================================================
- 
+
 const DATA_FILE = 'botdata.json';
- 
+
 function saveData() {
     const data = {
         minShots, minOnTarget, minPossession, minXG,
@@ -30,7 +30,7 @@ function saveData() {
     };
     fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
- 
+
 function loadData() {
     try {
         if (fs.existsSync(DATA_FILE)) {
@@ -56,7 +56,7 @@ function loadData() {
         console.log("Erreur chargement données:", err.message);
     }
 }
- 
+
 // 🔒 Variables globales
 let sentMatches = [];
 let sentMatchesLive = [];
@@ -66,10 +66,10 @@ let resultsLive = [];
 let leagueStats = {};
 let modePrudent = false;
 let bankroll = 100;
- 
+
 // 🆕 Paris en attente de ta validation { fixtureId: { matchData, signalData } }
 let pendingValidation = {};
- 
+
 // 🎯 Paramètres adaptatifs
 let minShots = 5;
 let minOnTarget = 2;
@@ -78,9 +78,9 @@ let minXG = 0.5;
 let minXG_live = 0.6;
 let minPoss_live = 52;
 let minShots_live = 4;
- 
+
 loadData();
- 
+
 // 🏆 GRANDES LIGUES
 const GRANDES_LIGUES = [
     "Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1",
@@ -88,17 +88,17 @@ const GRANDES_LIGUES = [
     "Conference League", "Championship", "Serie B", "2. Bundesliga",
     "Ligue 2", "La Liga2"
 ];
- 
+
 function estGrandeLigue(leagueName) {
     return GRANDES_LIGUES.some(l =>
         leagueName.toLowerCase().includes(l.toLowerCase())
     );
 }
- 
+
 // ============================================================
 // 💰 BANKROLL + MODE PRUDENT
 // ============================================================
- 
+
 function getMiseOptimale() {
     const derniers = results.slice(-10);
     if (derniers.length < 3) return 1;
@@ -110,7 +110,7 @@ function getMiseOptimale() {
     if (tauxRecent >= 0.5) return 1;
     return 0.5;
 }
- 
+
 function verifierSeriePerdante() {
     const derniers = results.slice(-3);
     if (derniers.length < 3) return;
@@ -130,28 +130,28 @@ function verifierSeriePerdante() {
         bot.sendMessage(chatId, `✅ *MODE PRUDENT DÉSACTIVÉ* — 2 wins consécutifs ! 🔥`, { parse_mode: "Markdown" });
     }
 }
- 
+
 function updateLeagueStats(league, win) {
     if (!leagueStats[league]) leagueStats[league] = { wins: 0, total: 0 };
     leagueStats[league].total++;
     if (win) leagueStats[league].wins++;
     saveData();
 }
- 
+
 function getLeagueScore(league) {
     const stats = leagueStats[league];
     if (!stats || stats.total < 3) return null;
     return stats.wins / stats.total;
 }
- 
+
 // ============================================================
 // 🧠 CONSEIL PERSONNALISÉ basé sur l'historique
 // ============================================================
- 
+
 function getConseil(signal, league, homePoss, homeXG, homeShots) {
     const conseils = [];
     let scoreConseil = 0;
- 
+
     // 1. Analyse de la ligue
     const leagueScore = getLeagueScore(league);
     if (leagueScore !== null) {
@@ -168,14 +168,14 @@ function getConseil(signal, league, homePoss, homeXG, homeShots) {
     } else {
         conseils.push(`📊 Ligue sans historique suffisant`);
     }
- 
+
     // 2. Analyse des stats par rapport aux moyennes gagnantes
     const winsHistorique = results.filter(r => r.win);
     if (winsHistorique.length >= 5) {
         const avgWinXG = winsHistorique.reduce((a, b) => a + b.homeXG, 0) / winsHistorique.length;
         const avgWinPoss = winsHistorique.reduce((a, b) => a + b.homePoss, 0) / winsHistorique.length;
         const avgWinShots = winsHistorique.reduce((a, b) => a + b.homeShots, 0) / winsHistorique.length;
- 
+
         if (homeXG >= avgWinXG) {
             conseils.push(`🎯 xG (${homeXG}) au dessus de ta moyenne gagnante (${avgWinXG.toFixed(1)})`);
             scoreConseil += 25;
@@ -183,7 +183,7 @@ function getConseil(signal, league, homePoss, homeXG, homeShots) {
             conseils.push(`📉 xG (${homeXG}) en dessous de ta moyenne gagnante (${avgWinXG.toFixed(1)})`);
             scoreConseil -= 10;
         }
- 
+
         if (homePoss >= avgWinPoss) {
             scoreConseil += 20;
         }
@@ -191,13 +191,13 @@ function getConseil(signal, league, homePoss, homeXG, homeShots) {
             scoreConseil += 15;
         }
     }
- 
+
     // 3. Mode prudent
     if (modePrudent) {
         conseils.push(`🛡️ Mode prudent actif — mise réduite recommandée`);
         scoreConseil -= 15;
     }
- 
+
     // 4. Taux de réussite récent global
     const derniers5 = results.slice(-5);
     if (derniers5.length >= 3) {
@@ -210,11 +210,11 @@ function getConseil(signal, league, homePoss, homeXG, homeShots) {
             scoreConseil -= 15;
         }
     }
- 
+
     // 5. Type de signal
     if (signal === "perfect") scoreConseil += 20;
     else if (signal === "next_goal") scoreConseil += 10;
- 
+
     // Recommandation finale
     let recommandation;
     if (scoreConseil >= 60) {
@@ -224,14 +224,14 @@ function getConseil(signal, league, homePoss, homeXG, homeShots) {
     } else {
         recommandation = "🔴 *BOT RECOMMANDE : PRUDENCE*";
     }
- 
+
     return { conseils, recommandation, scoreConseil };
 }
- 
+
 // ============================================================
 // 🔥 API MATCHS LIVE
 // ============================================================
- 
+
 async function getMatches() {
     try {
         const response = await axios.get(
@@ -244,11 +244,11 @@ async function getMatches() {
         return [];
     }
 }
- 
+
 // ============================================================
 // 🧠 ANALYSE MI-TEMPS — envoie les données + boutons OUI/NON
 // ============================================================
- 
+
 function analyseMatch(match) {
     const home = match.teams.home.name;
     const away = match.teams.away.name;
@@ -256,36 +256,36 @@ function analyseMatch(match) {
     const awayGoals = match.goals.away;
     const league = match.league.name;
     const fixtureId = match.fixture.id;
- 
+
     const stats = match.statistics;
     if (!stats) return null;
- 
+
     const homeStats = stats.find(t => t.team.name === home);
     const awayStats = stats.find(t => t.team.name === away);
     if (!homeStats || !awayStats) return null;
- 
+
     const getStat = (team, type) =>
         team.statistics.find(s => s.type === type)?.value || 0;
- 
+
     const homeShots = getStat(homeStats, "Total Shots");
     const homeOnTarget = getStat(homeStats, "Shots on Goal");
     const homePoss = parseInt(getStat(homeStats, "Ball Possession"));
     const homeXG = parseFloat(getStat(homeStats, "Expected Goals")) || 0;
- 
+
     const seuilPoss = modePrudent ? minPossession + 5 : minPossession;
     const seuilXG = modePrudent ? minXG + 0.2 : minXG;
     const seuilShots = modePrudent ? minShots + 2 : minShots;
- 
+
     let score = 0;
     if (homePoss > seuilPoss) score += 25;
     if (homeShots >= seuilShots) score += 25;
     if (homeOnTarget >= minOnTarget) score += 25;
     if (homeXG >= seuilXG) score += 25;
- 
+
     // Déterminer le niveau du signal
     let signalType = null;
     let signalLabel = "";
- 
+
     if (homePoss >= 62 && homeShots >= 10 && homeOnTarget >= 5 && homeXG >= 1.5 && homeGoals <= awayGoals) {
         signalType = "perfect";
         signalLabel = "🟢🟢 MATCH PARFAIT";
@@ -296,12 +296,12 @@ function analyseMatch(match) {
         signalType = "over";
         signalLabel = "🔥 VALUE BET";
     }
- 
+
     if (!signalType) return null;
- 
+
     const mise = getMiseOptimale();
     const { conseils, recommandation, scoreConseil } = getConseil(signalType, league, homePoss, homeXG, homeShots);
- 
+
     // Construction du message
     let msg = `🏆 ${league}\n\n`;
     msg += `${signalLabel}\n\n`;
@@ -317,7 +317,7 @@ function analyseMatch(match) {
     msg += `\n${recommandation}\n\n`;
     msg += `💰 Mise suggérée: ${mise}% (≈ ${(bankroll * mise / 100).toFixed(2)}€)\n\n`;
     msg += `👇 *Tu prends ce pari ?*`;
- 
+
     return {
         message: msg,
         signalType,
@@ -327,11 +327,11 @@ function analyseMatch(match) {
         data: { homeShots, homeOnTarget, homePoss, homeXG, home, away, homeGoals, awayGoals }
     };
 }
- 
+
 // ============================================================
 // 📨 ENVOI SIGNAL AVEC BOUTONS OUI / NON
 // ============================================================
- 
+
 function envoyerSignalAvecBoutons(result) {
     const keyboard = {
         inline_keyboard: [[
@@ -339,12 +339,12 @@ function envoyerSignalAvecBoutons(result) {
             { text: "❌ NON je passe", callback_data: `pari_non_${result.fixtureId}` }
         ]]
     };
- 
+
     bot.sendMessage(chatId, result.message, {
         parse_mode: "Markdown",
         reply_markup: keyboard
     });
- 
+
     // Sauvegarder en attente de validation
     pendingValidation[result.fixtureId] = {
         signalType: result.signalType,
@@ -355,25 +355,25 @@ function envoyerSignalAvecBoutons(result) {
     };
     saveData();
 }
- 
+
 // ============================================================
 // 🎮 GESTION DES BOUTONS OUI / NON
 // ============================================================
- 
+
 bot.on('callback_query', async (query) => {
     if (String(query.message.chat.id) !== String(chatId)) return;
     const data = query.data;
     bot.answerCallbackQuery(query.id);
- 
+
     // ✅ L'utilisateur prend le pari
     if (data.startsWith('pari_oui_')) {
         const fixtureId = parseInt(data.replace('pari_oui_', ''));
         const pv = pendingValidation[fixtureId];
         if (!pv) return;
- 
+
         pv.decision = 'oui';
         saveData();
- 
+
         // Enregistrer dans pendingBets pour suivre le résultat
         pendingBets.push({
             fixtureId,
@@ -384,7 +384,7 @@ bot.on('callback_query', async (query) => {
             ...pv.data,
             checked: false
         });
- 
+
         const mise = getMiseOptimale();
         bot.sendMessage(chatId,
             `✅ *Pari enregistré !*\n\n` +
@@ -394,16 +394,16 @@ bot.on('callback_query', async (query) => {
             { parse_mode: "Markdown" }
         );
     }
- 
+
     // ❌ L'utilisateur passe
     else if (data.startsWith('pari_non_')) {
         const fixtureId = parseInt(data.replace('pari_non_', ''));
         const pv = pendingValidation[fixtureId];
         if (!pv) return;
- 
+
         pv.decision = 'non';
         saveData();
- 
+
         // On enregistre quand même pour apprendre — le bot suivra le résultat
         pendingBets.push({
             fixtureId,
@@ -414,21 +414,21 @@ bot.on('callback_query', async (query) => {
             ...pv.data,
             checked: false
         });
- 
+
         bot.sendMessage(chatId,
             `❌ *Pari refusé — je continue à surveiller.*\n\nJe te dirai quand même ce qu'il se passe en fin de match pour que l'on apprenne ensemble. 📊`,
             { parse_mode: "Markdown" }
         );
     }
- 
+
     // ═══════════════════════════════
     // MENU PRINCIPAL
     // ═══════════════════════════════
- 
+
     else if (data === "menu_stats") {
         const prisParMoi = results.filter(r => r.prisParUtilisateur);
         const nonPris = results.filter(r => r.prisParUtilisateur === false);
- 
+
         const tauxPris = prisParMoi.length > 0
             ? Math.round((prisParMoi.filter(r => r.win).length / prisParMoi.length) * 100)
             : "—";
@@ -438,7 +438,7 @@ bot.on('callback_query', async (query) => {
         const tauxTotal = results.length > 0
             ? Math.round((results.filter(r => r.win).length / results.length) * 100)
             : "—";
- 
+
         const msg =
             `📊 *STATS & RÉGLAGES*\n\n` +
             `*— PARAMÈTRES —*\n` +
@@ -449,33 +449,33 @@ bot.on('callback_query', async (query) => {
             `📊 Taux global bot: *${tauxTotal}%*\n\n` +
             `🛡️ Mode prudent: ${modePrudent ? "ACTIF ⚠️" : "Inactif ✅"}\n` +
             `💰 Mise actuelle: ${getMiseOptimale()}% (≈ ${(bankroll * getMiseOptimale() / 100).toFixed(2)}€)`;
- 
+
         bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
     }
- 
+
     else if (data === "menu_recap") {
         bot.sendMessage(chatId, "📅 Lancement du récap du jour...");
         sendDailyRecap();
     }
- 
+
     else if (data === "menu_bilan") {
         sendNightReport();
     }
- 
+
     else if (data === "menu_edit_ht") {
         bot.sendMessage(chatId,
             `⚙️ *CRITÈRES MI-TEMPS*\n\nValeurs actuelles:\n👉 Possession: ${minPossession}% | Tirs: ${minShots} | Cadrés: ${minOnTarget} | xG: ${minXG}\n\nCommandes:\n• /setposs [val]\n• /settirs [val]\n• /setcadres [val]\n• /setxg [val]`,
             { parse_mode: "Markdown" }
         );
     }
- 
+
     else if (data === "menu_edit_live") {
         bot.sendMessage(chatId,
             `⚙️ *CRITÈRES LIVE 60-70MIN*\n\nValeurs: xG: ${minXG_live} | Poss: ${minPoss_live}% | Tirs: ${minShots_live}\n\nCommandes:\n• /setxglive [val]\n• /setposslive [val]\n• /settirslive [val]`,
             { parse_mode: "Markdown" }
         );
     }
- 
+
     else if (data === "menu_history") {
         const prisParMoi = results.filter(r => r.prisParUtilisateur).slice(-10);
         if (prisParMoi.length === 0) {
@@ -489,7 +489,7 @@ bot.on('callback_query', async (query) => {
         });
         bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
     }
- 
+
     else if (data === "menu_manques") {
         // Paris refusés qui auraient gagné
         const manques = results.filter(r => !r.prisParUtilisateur && r.win).slice(-5);
@@ -504,7 +504,7 @@ bot.on('callback_query', async (query) => {
         });
         bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
     }
- 
+
     else if (data === "menu_learning") {
         const checkedLive = resultsLive.filter(r => r.checked);
         const winRate = checkedLive.length > 0
@@ -515,7 +515,7 @@ bot.on('callback_query', async (query) => {
             { parse_mode: "Markdown" }
         );
     }
- 
+
     else if (data === "menu_leagues") {
         const ligues = Object.entries(leagueStats).filter(([, s]) => s.total > 0);
         if (ligues.length === 0) {
@@ -531,19 +531,19 @@ bot.on('callback_query', async (query) => {
         });
         bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
     }
- 
+
     else if (data === "menu_bankroll") {
         bot.sendMessage(chatId,
             `💰 *BANKROLL*\n\nBankroll: *${bankroll}€*\nMise actuelle: *${getMiseOptimale()}%* (≈ ${(bankroll * getMiseOptimale() / 100).toFixed(2)}€)\n\n/setbankroll [montant]`,
             { parse_mode: "Markdown" }
         );
     }
- 
+
     else if (data === "menu_live_now") {
         bot.sendMessage(chatId, "📡 Récupération des matchs en cours...");
         afficherMatchsEnCours();
     }
- 
+
     else if (data === "menu_reset") {
         const keyboard = { inline_keyboard: [[
             { text: "✅ Confirmer", callback_data: "confirm_reset" },
@@ -551,7 +551,7 @@ bot.on('callback_query', async (query) => {
         ]]};
         bot.sendMessage(chatId, "⚠️ Remettre tous les critères par défaut ?", { reply_markup: keyboard });
     }
- 
+
     else if (data === "confirm_reset") {
         minShots = 5; minOnTarget = 2; minPossession = 51; minXG = 0.5;
         minXG_live = 0.6; minPoss_live = 52; minShots_live = 4;
@@ -559,36 +559,36 @@ bot.on('callback_query', async (query) => {
         saveData();
         bot.sendMessage(chatId, "✅ Critères réinitialisés !");
     }
- 
+
     else if (data === "menu_back") {
         sendMainMenu();
     }
 });
- 
+
 // ============================================================
 // 🎮 MENU PRINCIPAL
 // ============================================================
- 
+
 // ============================================================
 // 📡 MATCHS EN COURS — stats en temps réel
 // ============================================================
- 
+
 async function afficherMatchsEnCours() {
     const matches = await getMatches();
     const grandeLigueMatches = matches.filter(m => estGrandeLigue(m.league.name));
- 
+
     if (grandeLigueMatches.length === 0) {
         bot.sendMessage(chatId, "📡 Aucun match en cours dans les grandes ligues.");
         return;
     }
- 
+
     // Trier par minute (les plus avancés en premier)
     grandeLigueMatches.sort((a, b) => (b.fixture.status.elapsed || 0) - (a.fixture.status.elapsed || 0));
- 
+
     let msg = `📡 *MATCHS EN COURS — ${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Paris' })}*\n`;
     msg += `🏆 Grandes ligues européennes\n`;
     msg += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
- 
+
     for (const match of grandeLigueMatches) {
         const home = match.teams.home.name;
         const away = match.teams.away.name;
@@ -597,10 +597,10 @@ async function afficherMatchsEnCours() {
         const minute = match.fixture.status.elapsed || 0;
         const statut = match.fixture.status.short;
         const league = match.league.name;
- 
+
         const stats = match.statistics;
         let statsLine = "";
- 
+
         if (stats) {
             const homeStats = stats.find(t => t.team.name === home);
             if (homeStats) {
@@ -609,37 +609,37 @@ async function afficherMatchsEnCours() {
                 const homeOnTarget = getStat(homeStats, "Shots on Goal");
                 const homePoss = parseInt(getStat(homeStats, "Ball Possession"));
                 const homeXG = parseFloat(getStat(homeStats, "Expected Goals")) || 0;
- 
+
                 // Indicateur visuel si critères remplis
                 const hotSignal =
                     homePoss >= minPossession &&
                     homeShots >= minShots &&
                     homeOnTarget >= minOnTarget &&
                     homeXG >= minXG;
- 
+
                 statsLine = `📊 ${home}: Poss ${homePoss}% | Tirs ${homeShots} | Cadrés ${homeOnTarget} | xG ${homeXG}`;
                 if (hotSignal) statsLine += ` 🔥`;
             }
         }
- 
+
         const statutLabel = statut === "HT" ? "⏸️ MI-TEMPS" : `▶️ ${minute}'`;
- 
+
         msg += `${statutLabel} — 🏆 ${league}\n`;
         msg += `⚽ *${home} ${homeGoals} - ${awayGoals} ${away}*\n`;
         if (statsLine) msg += `${statsLine}\n`;
         msg += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
     }
- 
+
     msg += `🔢 ${grandeLigueMatches.length} match(s) en cours\n`;
     msg += `💡 🔥 = critères remplis pour un signal`;
- 
+
     bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
 }
- 
+
 function isAuthorized(msg) {
     return String(msg.chat.id) === String(chatId);
 }
- 
+
 function sendMainMenu() {
     const keyboard = {
         inline_keyboard: [
@@ -673,14 +673,14 @@ function sendMainMenu() {
         reply_markup: keyboard
     });
 }
- 
+
 bot.onText(/\/menu/, (msg) => { if (!isAuthorized(msg)) return; sendMainMenu(); });
 bot.onText(/\/start/, (msg) => { if (!isAuthorized(msg)) return; bot.sendMessage(chatId, "👋 Bot démarré ! Tape /menu pour le panneau de contrôle."); });
- 
+
 // ============================================================
 // 📝 COMMANDES
 // ============================================================
- 
+
 bot.onText(/\/setposs (\d+)/, (msg, match) => {
     if (!isAuthorized(msg)) return;
     const val = parseInt(match[1]);
@@ -688,7 +688,7 @@ bot.onText(/\/setposs (\d+)/, (msg, match) => {
     minPossession = val; saveData();
     bot.sendMessage(chatId, `✅ Possession → *${minPossession}%*`, { parse_mode: "Markdown" });
 });
- 
+
 bot.onText(/\/settirs (\d+)/, (msg, match) => {
     if (!isAuthorized(msg)) return;
     const val = parseInt(match[1]);
@@ -696,7 +696,7 @@ bot.onText(/\/settirs (\d+)/, (msg, match) => {
     minShots = val; saveData();
     bot.sendMessage(chatId, `✅ Tirs → *${minShots}*`, { parse_mode: "Markdown" });
 });
- 
+
 bot.onText(/\/setcadres (\d+)/, (msg, match) => {
     if (!isAuthorized(msg)) return;
     const val = parseInt(match[1]);
@@ -704,7 +704,7 @@ bot.onText(/\/setcadres (\d+)/, (msg, match) => {
     minOnTarget = val; saveData();
     bot.sendMessage(chatId, `✅ Cadrés → *${minOnTarget}*`, { parse_mode: "Markdown" });
 });
- 
+
 bot.onText(/\/setxg (.+)/, (msg, match) => {
     if (!isAuthorized(msg)) return;
     const val = parseFloat(match[1]);
@@ -712,7 +712,7 @@ bot.onText(/\/setxg (.+)/, (msg, match) => {
     minXG = val; saveData();
     bot.sendMessage(chatId, `✅ xG → *${minXG}*`, { parse_mode: "Markdown" });
 });
- 
+
 bot.onText(/\/setxglive (.+)/, (msg, match) => {
     if (!isAuthorized(msg)) return;
     const val = parseFloat(match[1]);
@@ -720,7 +720,7 @@ bot.onText(/\/setxglive (.+)/, (msg, match) => {
     minXG_live = val; saveData();
     bot.sendMessage(chatId, `✅ xG live → *${minXG_live}*`, { parse_mode: "Markdown" });
 });
- 
+
 bot.onText(/\/setposslive (\d+)/, (msg, match) => {
     if (!isAuthorized(msg)) return;
     const val = parseInt(match[1]);
@@ -728,7 +728,7 @@ bot.onText(/\/setposslive (\d+)/, (msg, match) => {
     minPoss_live = val; saveData();
     bot.sendMessage(chatId, `✅ Possession live → *${minPoss_live}%*`, { parse_mode: "Markdown" });
 });
- 
+
 bot.onText(/\/settirslive (\d+)/, (msg, match) => {
     if (!isAuthorized(msg)) return;
     const val = parseInt(match[1]);
@@ -736,7 +736,7 @@ bot.onText(/\/settirslive (\d+)/, (msg, match) => {
     minShots_live = val; saveData();
     bot.sendMessage(chatId, `✅ Tirs live → *${minShots_live}*`, { parse_mode: "Markdown" });
 });
- 
+
 bot.onText(/\/setbankroll (\d+)/, (msg, match) => {
     if (!isAuthorized(msg)) return;
     const val = parseInt(match[1]);
@@ -744,23 +744,23 @@ bot.onText(/\/setbankroll (\d+)/, (msg, match) => {
     bankroll = val; saveData();
     bot.sendMessage(chatId, `✅ Bankroll → *${bankroll}€* | Mise: ${getMiseOptimale()}% (≈ ${(bankroll * getMiseOptimale() / 100).toFixed(2)}€)`, { parse_mode: "Markdown" });
 });
- 
+
 bot.onText(/\/modeprudent (.+)/, (msg, match) => {
     if (!isAuthorized(msg)) return;
     const val = match[1].toLowerCase();
     if (val === "on") { modePrudent = true; saveData(); bot.sendMessage(chatId, "🛡️ Mode prudent activé."); }
     else if (val === "off") { modePrudent = false; saveData(); bot.sendMessage(chatId, "✅ Mode prudent désactivé."); }
 });
- 
+
 // ============================================================
 // 🤖 ANALYSE MI-TEMPS — toutes les minutes
 // ============================================================
- 
+
 setInterval(async () => {
     const matches = await getMatches();
     const grandeLigueMatches = matches.filter(m => estGrandeLigue(m.league.name));
     const halfMatches = grandeLigueMatches.filter(m => m.fixture.status.short === "HT");
- 
+
     for (const match of halfMatches) {
         const matchId = match.fixture.id;
         if (!sentMatches.includes(matchId)) {
@@ -774,45 +774,45 @@ setInterval(async () => {
         }
     }
 }, 60000);
- 
+
 // ============================================================
 // ⏱️ ANALYSE 60-70 MIN — toutes les minutes
 // ============================================================
- 
+
 function analyseMatchLive(match) {
     const home = match.teams.home.name;
     const away = match.teams.away.name;
     const homeGoals = match.goals.home;
     const awayGoals = match.goals.away;
     const minute = match.fixture.status.elapsed;
- 
+
     if (!minute || minute < 60 || minute > 70) return null;
- 
+
     const stats = match.statistics;
     if (!stats) return null;
- 
+
     const homeStats = stats.find(t => t.team.name === home);
     if (!homeStats) return null;
- 
+
     const getStat = (team, type) =>
         team.statistics.find(s => s.type === type)?.value || 0;
- 
+
     const homeShots = getStat(homeStats, "Total Shots");
     const homeOnTarget = getStat(homeStats, "Shots on Goal");
     const homePoss = parseInt(getStat(homeStats, "Ball Possession"));
     const homeXG = parseFloat(getStat(homeStats, "Expected Goals")) || 0;
- 
+
     if (homeXG < minXG_live || homePoss < minPoss_live || homeShots < minShots_live) return null;
- 
+
     let confidence = 0;
     if (homeXG >= minXG_live) confidence += 40;
     if (homePoss >= minPoss_live) confidence += 30;
     if (homeShots >= minShots_live) confidence += 30;
     if (homeOnTarget >= 2) confidence += 10;
- 
+
     const mise = getMiseOptimale();
     const { recommandation } = getConseil("live_v1", match.league.name, homePoss, homeXG, homeShots);
- 
+
     return {
         message: `⏱️ SIGNAL LIVE 60-70' ⏱️\n\n⚽ ${home} ${homeGoals} - ${awayGoals} ${away}\n🕐 Minute: ${minute}'\n\n📊 Domination V1:\n👉 Possession: ${homePoss}%\n👉 Tirs: ${homeShots} | Cadrés: ${homeOnTarget}\n👉 xG: ${homeXG}\n\n${recommandation}\n💡 Confiance: ${Math.min(confidence, 95)}%\n💰 Mise suggérée: ${mise}% (≈ ${(bankroll * mise / 100).toFixed(2)}€)\n\n👇 *Tu prends ce pari ?*`,
         confidence,
@@ -822,7 +822,7 @@ function analyseMatchLive(match) {
         data: { homeShots, homeOnTarget, homePoss, homeXG, home, away, homeGoals, awayGoals }
     };
 }
- 
+
 setInterval(async () => {
     const matches = await getMatches();
     const grandeLigueMatches = matches.filter(m => estGrandeLigue(m.league.name));
@@ -830,7 +830,7 @@ setInterval(async () => {
         const min = m.fixture.status.elapsed;
         return min >= 60 && min <= 70;
     });
- 
+
     for (const match of liveMatches) {
         const matchId = `live_${match.fixture.id}`;
         if (!sentMatchesLive.includes(matchId)) {
@@ -838,17 +838,17 @@ setInterval(async () => {
             if (result && result.confidence >= 60) {
                 const league = match.league.name;
                 const msgAvecLigue = `🏆 ${league}\n\n` + result.message;
- 
+
                 const keyboard = {
                     inline_keyboard: [[
                         { text: "✅ OUI je prends", callback_data: `pari_oui_${result.fixtureId}` },
                         { text: "❌ NON je passe", callback_data: `pari_non_${result.fixtureId}` }
                     ]]
                 };
- 
+
                 bot.sendMessage(chatId, msgAvecLigue, { parse_mode: "Markdown", reply_markup: keyboard });
                 fs.appendFileSync("history_live.txt", msgAvecLigue + "\n\n");
- 
+
                 pendingValidation[result.fixtureId] = {
                     signalType: result.type,
                     league,
@@ -856,18 +856,18 @@ setInterval(async () => {
                     data: result.data,
                     decision: null
                 };
- 
+
                 sentMatchesLive.push(matchId);
                 saveData();
             }
         }
     }
 }, 60000);
- 
+
 // ============================================================
 // 🧠 CHECK RÉSULTATS — toutes les 5 minutes
 // ============================================================
- 
+
 setInterval(async () => {
     for (let bet of pendingBets) {
         if (bet.checked) continue;
@@ -877,7 +877,7 @@ setInterval(async () => {
                 { headers: { 'x-apisports-key': apiKey } }
             );
             const match = res.data.response[0];
- 
+
             if (match.fixture.status.short === "FT") {
                 const totalGoals = match.goals.home + match.goals.away;
                 let win = false;
@@ -885,9 +885,9 @@ setInterval(async () => {
                 if (bet.type === "next_goal" && totalGoals >= 2) win = true;
                 if (bet.type === "perfect" && totalGoals >= 2) win = true;
                 if (bet.type === "live_v1") win = match.goals.home > bet.goalsHomeAtSignal;
- 
+
                 bet.checked = true;
- 
+
                 // Message de résultat personnalisé selon décision
                 if (bet.prisParUtilisateur) {
                     bot.sendMessage(chatId,
@@ -907,7 +907,7 @@ setInterval(async () => {
                         { parse_mode: "Markdown" }
                     );
                 }
- 
+
                 results.push({ ...bet, win, timestamp: Date.now() });
                 if (bet.league) updateLeagueStats(bet.league, win);
                 verifierSeriePerdante();
@@ -918,58 +918,58 @@ setInterval(async () => {
         }
     }
 }, 300000);
- 
+
 // ============================================================
 // 🧠 AUTO LEARNING — toutes les 10 minutes
 // ============================================================
- 
+
 setInterval(() => {
     // Apprentissage uniquement sur les paris PRIS par l'utilisateur
     const prisParMoi = results.filter(r => r.prisParUtilisateur);
     if (prisParMoi.length < 10) return;
- 
+
     const wins = prisParMoi.filter(r => r.win);
     const losses = prisParMoi.filter(r => !r.win);
     if (wins.length === 0 || losses.length === 0) return;
- 
+
     const avg = (arr, key) => arr.reduce((a, b) => a + b[key], 0) / arr.length;
- 
+
     if (avg(wins, "homeShots") > avg(losses, "homeShots")) minShots = Math.round(avg(wins, "homeShots"));
     if (avg(wins, "homePoss") > avg(losses, "homePoss")) minPossession = Math.round(avg(wins, "homePoss"));
     if (avg(wins, "homeXG") > avg(losses, "homeXG")) minXG = parseFloat(avg(wins, "homeXG").toFixed(1));
- 
+
     saveData();
     console.log("🧠 AUTO LEARNING — Shots:", minShots, "| Poss:", minPossession, "| xG:", minXG);
 }, 600000);
- 
+
 // ============================================================
 // 🌙 BILAN NOCTURNE 23H
 // ============================================================
- 
+
 async function sendNightReport() {
     const today = new Date().toLocaleDateString('fr-FR');
     const hier = Date.now() - 24 * 60 * 60 * 1000;
- 
+
     const aujourdhui = results.filter(r => r.timestamp && r.timestamp > hier);
     const prisAujourdhui = aujourdhui.filter(r => r.prisParUtilisateur);
     const refusesAujourdhui = aujourdhui.filter(r => !r.prisParUtilisateur);
- 
+
     const tauxGlobal = results.length > 0
         ? Math.round((results.filter(r => r.win && r.prisParUtilisateur).length / results.filter(r => r.prisParUtilisateur).length) * 100)
         : 0;
- 
+
     const topLigues = Object.entries(leagueStats)
         .filter(([, s]) => s.total >= 3)
         .sort((a, b) => (b[1].wins / b[1].total) - (a[1].wins / a[1].total))
         .slice(0, 3);
- 
+
     let msg = `🌙 *BILAN DU JOUR — ${today}*\n\n`;
     msg += `📊 *Aujourd'hui:*\n`;
     msg += `👉 Signaux reçus: ${aujourdhui.length}\n`;
     msg += `✅ Paris pris: ${prisAujourdhui.length} → ${prisAujourdhui.filter(r => r.win).length}W / ${prisAujourdhui.filter(r => !r.win).length}L\n`;
     msg += `❌ Paris refusés: ${refusesAujourdhui.length} → ${refusesAujourdhui.filter(r => r.win).length} auraient gagné\n\n`;
     msg += `📈 *Global:* ${tauxGlobal}% de réussite sur tes paris\n\n`;
- 
+
     if (topLigues.length > 0) {
         msg += `🏆 *Top ligues:*\n`;
         topLigues.forEach(([league, stats]) => {
@@ -977,17 +977,17 @@ async function sendNightReport() {
         });
         msg += `\n`;
     }
- 
+
     msg += `🛡️ Mode prudent: ${modePrudent ? "ACTIF ⚠️" : "Inactif ✅"}\n`;
     msg += `💰 Mise: ${getMiseOptimale()}% bankroll`;
- 
+
     bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
 }
- 
+
 // ============================================================
 // 📅 RÉCAP QUOTIDIEN 10H
 // ============================================================
- 
+
 async function getMatchesOfDay() {
     try {
         const today = new Date().toISOString().split('T')[0];
@@ -1001,7 +1001,7 @@ async function getMatchesOfDay() {
         return [];
     }
 }
- 
+
 async function getOdds(fixtureId) {
     try {
         const response = await axios.get(
@@ -1022,14 +1022,14 @@ async function getOdds(fixtureId) {
         return null;
     }
 }
- 
+
 async function sendDailyRecap() {
     const matches = await getMatchesOfDay();
     if (matches.length === 0) { bot.sendMessage(chatId, "📅 Aucun match trouvé."); return; }
- 
+
     const V1_MIN = 1.90, V1_MAX = 2.50, VE_MIN = 2.10, VE_MAX = 4.00;
     let filteredMatches = [];
- 
+
     for (const match of matches) {
         if (!estGrandeLigue(match.league.name)) continue;
         const fixtureId = match.fixture.id;
@@ -1049,9 +1049,9 @@ async function sendDailyRecap() {
         }
         await new Promise(r => setTimeout(r, 200));
     }
- 
+
     if (filteredMatches.length === 0) { bot.sendMessage(chatId, "📅 Aucun match ne correspond aux critères."); return; }
- 
+
     let msg = `📅 *MATCHS DU JOUR — ${new Date().toLocaleDateString('fr-FR')}*\n🏆 Grandes ligues | 🎯 V1: 1.90-2.50 | V2: 2.10-4.00\n━━━━━━━━━━━━━━━━━━━━━━\n\n`;
     for (const m of filteredMatches) {
         msg += `⚽ ${m.home} vs ${m.away}${m.leagueBonus}\n🏆 ${m.league} (${m.country})\n🕐 ${m.timeStr}\n📊 V1: ${m.v1} | N: ${m.vN} | V2: ${m.ve}\n━━━━━━━━━━━━━━━━━━━━━━\n\n`;
@@ -1059,7 +1059,7 @@ async function sendDailyRecap() {
     msg += `🔢 Total: ${filteredMatches.length} match(s)`;
     bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
 }
- 
+
 // ⏰ Schedulers 10h + 23h
 setInterval(() => {
     const parisTime = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
