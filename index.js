@@ -987,14 +987,14 @@ async function sendDailyRecap() {
 
     let msg = `📅 *MATCHS DU JOUR — ${new Date().toLocaleDateString('fr-FR')}*\n`;
     msg += `🏆 Grandes ligues européennes\n`;
-    msg += `🎯 V1: 1.90-2.50 | Ve: 2.10-4.00\n`;
+    msg += `🎯 V1: 1.90-2.50 | V2: 2.10-4.00\n`;
     msg += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
     for (const m of filteredMatches) {
         msg += `⚽ ${m.home} vs ${m.away}${m.leagueBonus}\n`;
         msg += `🏆 ${m.league} (${m.country})\n`;
         msg += `🕐 ${m.timeStr}\n`;
-        msg += `📊 V1: ${m.v1} | N: ${m.vN} | Ve: ${m.ve}\n`;
+        msg += `📊 V1: ${m.v1} | N: ${m.vN} | V2: ${m.ve}\n`;
         msg += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
     }
 
