@@ -13,15 +13,47 @@ const bot = new TelegramBot(token, { polling: true });
 console.log("🔥 BOT FINAL LANCÉ");
 
 // 🔒 éviter doublons
-let sentMatches = [];
+let sentMatches = [];       // matchs mi-temps déjà envoyés
+let sentMatchesLive = [];   // matchs 60-70min déjà envoyés
 let pendingBets = [];
 let results = [];
+let resultsLive = [];       // résultats spécifiques aux signaux 60-70min
 
-// 🎯 paramètres adaptatifs
+// 🎯 paramètres adaptatifs — mi-temps
 let minShots = 5;
 let minOnTarget = 2;
 let minPossession = 51;
 let minXG = 0.5;
+
+// 🎯 paramètres adaptatifs — signal 60-70min (auto-learning séparé)
+let minXG_live = 0.6;
+let minPoss_live = 52;
+let minShots_live = 4;
+
+// 🏆 FILTRE GRANDES LIGUES EUROPÉENNES
+const GRANDES_LIGUES = [
+    "Premier League",
+    "La Liga",
+    "Serie A",
+    "Bundesliga",
+    "Ligue 1",
+    "Eredivisie",
+    "Primeira Liga",
+    "Champions League",
+    "Europa League",
+    "Conference League",
+    "Championship",
+    "Serie B",
+    "2. Bundesliga",
+    "Ligue 2",
+    "La Liga2"
+];
+
+function estGrandeLigue(leagueName) {
+    return GRANDES_LIGUES.some(l =>
+        leagueName.toLowerCase().includes(l.toLowerCase())
+    );
+}
 
 // 📊 PROBA + MISE
 function getPredictionLevel(score, homeXG) {
@@ -29,7 +61,6 @@ function getPredictionLevel(score, homeXG) {
     if (probability > 90) probability = 90;
 
     let stake = 1;
-
     if (probability >= 85) stake = 5;
     else if (probability >= 75) stake = 3;
     else if (probability >= 65) stake = 2;
@@ -46,13 +77,8 @@ async function getMatches() {
     try {
         const response = await axios.get(
             'https://v3.football.api-sports.io/fixtures?live=all',
-            {
-                headers: {
-                    'x-apisports-key': apiKey
-                }
-            }
+            { headers: { 'x-apisports-key': apiKey } }
         );
-
         return response.data.response;
     } catch (err) {
         console.log("Erreur API :", err.message);
@@ -60,11 +86,10 @@ async function getMatches() {
     }
 }
 
-// 🧠 ANALYSE
+// 🧠 ANALYSE MI-TEMPS
 function analyseMatch(match) {
     const home = match.teams.home.name;
     const away = match.teams.away.name;
-
     const homeGoals = match.goals.home;
     const awayGoals = match.goals.away;
 
@@ -83,7 +108,6 @@ function analyseMatch(match) {
     const homePoss = parseInt(getStat(homeStats, "Ball Possession"));
     const homeXG = parseFloat(getStat(homeStats, "Expected Goals")) || 0;
 
-    // 🎯 score
     let score = 0;
     if (homePoss > minPossession) score += 25;
     if (homeShots >= minShots) score += 25;
@@ -178,25 +202,85 @@ function analyseMatch(match) {
     return null;
 }
 
-// 🤖 BOT - Analyse mi-temps
+// ⏱️ ANALYSE 60-70 MIN — But probable V1
+function analyseMatchLive(match) {
+    const home = match.teams.home.name;
+    const away = match.teams.away.name;
+    const homeGoals = match.goals.home;
+    const awayGoals = match.goals.away;
+    const minute = match.fixture.status.elapsed;
+
+    if (!minute || minute < 60 || minute > 70) return null;
+
+    const stats = match.statistics;
+    if (!stats) return null;
+
+    const homeStats = stats.find(t => t.team.name === home);
+    if (!homeStats) return null;
+
+    const getStat = (team, type) =>
+        team.statistics.find(s => s.type === type)?.value || 0;
+
+    const homeShots = getStat(homeStats, "Total Shots");
+    const homeOnTarget = getStat(homeStats, "Shots on Goal");
+    const homePoss = parseInt(getStat(homeStats, "Ball Possession"));
+    const homeXG = parseFloat(getStat(homeStats, "Expected Goals")) || 0;
+
+    // Critères adaptatifs — appris par auto-learning
+    const conditionOk =
+        homeXG >= minXG_live &&
+        homePoss >= minPoss_live &&
+        homeShots >= minShots_live;
+
+    if (!conditionOk) return null;
+
+    let confidence = 0;
+    if (homeXG >= minXG_live) confidence += 40;
+    if (homePoss >= minPoss_live) confidence += 30;
+    if (homeShots >= minShots_live) confidence += 30;
+    if (homeOnTarget >= 2) confidence += 10;
+
+    return {
+        message: `⏱️ SIGNAL LIVE 60-70' ⏱️
+
+⚽ ${home} ${homeGoals} - ${awayGoals} ${away}
+🕐 Minute: ${minute}'
+
+📊 Domination V1:
+👉 Possession: ${homePoss}%
+👉 Tirs totaux: ${homeShots}
+👉 Cadrés: ${homeOnTarget}
+👉 xG: ${homeXG} 🔬
+
+🎯 BUT PROBABLE: ${home}
+💡 Confiance: ${Math.min(confidence, 95)}%
+
+⚠️ Signal expérimental — auto-apprentissage en cours`,
+        confidence,
+        type: "live_v1",
+        data: { homeShots, homeOnTarget, homePoss, homeXG }
+    };
+}
+
+// 🤖 BOT - Analyse MI-TEMPS (grandes ligues uniquement)
 setInterval(async () => {
 
     const matches = await getMatches();
-    const halfMatches = matches.filter(m => m.fixture.status.short === "HT");
+    const grandeLigueMatches = matches.filter(m => estGrandeLigue(m.league.name));
+    const halfMatches = grandeLigueMatches.filter(m => m.fixture.status.short === "HT");
 
     for (const match of halfMatches) {
-
         const matchId = match.fixture.id;
 
         if (!sentMatches.includes(matchId)) {
-
             const result = analyseMatch(match);
 
             if (result && result.confidence >= 70) {
+                const league = match.league.name;
+                const msgAvecLigue = `🏆 ${league}\n\n` + result.message;
 
-                bot.sendMessage(chatId, result.message);
-
-                fs.appendFileSync("history.txt", result.message + "\n\n");
+                bot.sendMessage(chatId, msgAvecLigue);
+                fs.appendFileSync("history.txt", msgAvecLigue + "\n\n");
 
                 pendingBets.push({
                     fixtureId: matchId,
@@ -212,50 +296,113 @@ setInterval(async () => {
 
 }, 60000);
 
-// 🧠 CHECK RESULTATS
+// ⏱️ BOT - Analyse 60-70 MIN (grandes ligues uniquement)
+setInterval(async () => {
+
+    const matches = await getMatches();
+    const grandeLigueMatches = matches.filter(m => estGrandeLigue(m.league.name));
+
+    const liveMatches = grandeLigueMatches.filter(m => {
+        const min = m.fixture.status.elapsed;
+        return min >= 60 && min <= 70;
+    });
+
+    for (const match of liveMatches) {
+        const matchId = `live_${match.fixture.id}`;
+
+        if (!sentMatchesLive.includes(matchId)) {
+            const result = analyseMatchLive(match);
+
+            if (result && result.confidence >= 60) {
+                const league = match.league.name;
+                const msgAvecLigue = `🏆 ${league}\n\n` + result.message;
+
+                bot.sendMessage(chatId, msgAvecLigue);
+                fs.appendFileSync("history_live.txt", msgAvecLigue + "\n\n");
+
+                resultsLive.push({
+                    fixtureId: match.fixture.id,
+                    goalsHomeAtSignal: match.goals.home,
+                    goalsAwayAtSignal: match.goals.away,
+                    homeName: match.teams.home.name,
+                    ...result.data,
+                    checked: false,
+                    win: null
+                });
+
+                sentMatchesLive.push(matchId);
+            }
+        }
+    }
+
+}, 60000);
+
+// 🧠 CHECK RESULTATS MI-TEMPS
 setInterval(async () => {
 
     for (let bet of pendingBets) {
-
         if (bet.checked) continue;
 
         try {
             const res = await axios.get(
                 `https://v3.football.api-sports.io/fixtures?id=${bet.fixtureId}`,
-                {
-                    headers: {
-                        'x-apisports-key': apiKey
-                    }
-                }
+                { headers: { 'x-apisports-key': apiKey } }
             );
 
             const match = res.data.response[0];
 
             if (match.fixture.status.short === "FT") {
-
                 const totalGoals = match.goals.home + match.goals.away;
-
                 let win = false;
 
                 if (bet.type === "over" && totalGoals >= 2) win = true;
                 if (bet.type === "next_goal" && totalGoals >= 2) win = true;
                 if (bet.type === "perfect" && totalGoals >= 2) win = true;
 
-                console.log(`📊 RESULTAT → ${win ? "WIN ✅" : "LOSE ❌"}`);
-
+                console.log(`📊 RESULTAT MI-TEMPS → ${win ? "WIN ✅" : "LOSE ❌"}`);
                 results.push({ ...bet, win });
-
                 bet.checked = true;
             }
 
         } catch (err) {
-            console.log("Erreur check:", err.message);
+            console.log("Erreur check mi-temps:", err.message);
         }
     }
 
 }, 300000);
 
-// 🧠 AUTO LEARNING
+// 🧠 CHECK RESULTATS LIVE 60-70MIN
+setInterval(async () => {
+
+    for (let bet of resultsLive) {
+        if (bet.checked) continue;
+
+        try {
+            const res = await axios.get(
+                `https://v3.football.api-sports.io/fixtures?id=${bet.fixtureId}`,
+                { headers: { 'x-apisports-key': apiKey } }
+            );
+
+            const match = res.data.response[0];
+
+            if (match.fixture.status.short === "FT") {
+                // WIN si l'équipe domicile a marqué au moins 1 but après le signal
+                const finalHomeGoals = match.goals.home;
+                const win = finalHomeGoals > bet.goalsHomeAtSignal;
+
+                console.log(`⏱️ RESULTAT LIVE → ${win ? "WIN ✅" : "LOSE ❌"}`);
+                bet.win = win;
+                bet.checked = true;
+            }
+
+        } catch (err) {
+            console.log("Erreur check live:", err.message);
+        }
+    }
+
+}, 300000);
+
+// 🧠 AUTO LEARNING — MI-TEMPS
 setInterval(() => {
 
     if (results.length < 10) return;
@@ -268,10 +415,8 @@ setInterval(() => {
 
     const winShots = avg(wins, "homeShots");
     const loseShots = avg(losses, "homeShots");
-
     const winPoss = avg(wins, "homePoss");
     const losePoss = avg(losses, "homePoss");
-
     const winXG = avg(wins, "homeXG");
     const loseXG = avg(losses, "homeXG");
 
@@ -279,10 +424,61 @@ setInterval(() => {
     if (winPoss > losePoss) minPossession = Math.round(winPoss);
     if (winXG > loseXG) minXG = parseFloat(winXG.toFixed(1));
 
-    console.log("🧠 AUTO LEARNING");
-    console.log("Shots:", minShots);
-    console.log("Possession:", minPossession);
-    console.log("xG:", minXG);
+    console.log("🧠 AUTO LEARNING MI-TEMPS");
+    console.log("Shots:", minShots, "| Possession:", minPossession, "| xG:", minXG);
+
+}, 600000);
+
+// 🧠 AUTO LEARNING — SIGNAL LIVE 60-70MIN
+setInterval(() => {
+
+    const checked = resultsLive.filter(r => r.checked && r.win !== null);
+    if (checked.length < 5) return;
+
+    const wins = checked.filter(r => r.win);
+    const losses = checked.filter(r => !r.win);
+
+    if (wins.length === 0 || losses.length === 0) return;
+
+    const avg = (arr, key) =>
+        arr.reduce((a, b) => a + b[key], 0) / arr.length;
+
+    const winXG = avg(wins, "homeXG");
+    const loseXG = avg(losses, "homeXG");
+    const winPoss = avg(wins, "homePoss");
+    const losePoss = avg(losses, "homePoss");
+    const winShots = avg(wins, "homeShots");
+    const loseShots = avg(losses, "homeShots");
+
+    // Ajustement progressif par petits pas
+    if (winXG > loseXG) {
+        minXG_live = parseFloat(((minXG_live + winXG) / 2).toFixed(2));
+    }
+    if (winPoss > losePoss) {
+        minPoss_live = Math.round((minPoss_live + winPoss) / 2);
+    }
+    if (winShots > loseShots) {
+        minShots_live = Math.round((minShots_live + winShots) / 2);
+    }
+
+    const winRate = Math.round((wins.length / checked.length) * 100);
+
+    console.log("🧠 AUTO LEARNING LIVE 60-70MIN");
+    console.log(`xG min: ${minXG_live} | Possession min: ${minPoss_live}% | Tirs min: ${minShots_live}`);
+    console.log(`Taux de réussite: ${winRate}% (${wins.length}W / ${losses.length}L)`);
+
+    // Notification Telegram tous les 10 signaux analysés
+    if (checked.length % 10 === 0) {
+        bot.sendMessage(chatId,
+            `🧠 RAPPORT AUTO-LEARNING LIVE\n\n` +
+            `📊 Basé sur ${checked.length} signaux analysés\n` +
+            `✅ Taux de réussite: ${winRate}%\n\n` +
+            `🔧 Critères mis à jour:\n` +
+            `👉 xG min: ${minXG_live}\n` +
+            `👉 Possession min: ${minPoss_live}%\n` +
+            `👉 Tirs min: ${minShots_live}`
+        );
+    }
 
 }, 600000);
 
@@ -290,15 +486,12 @@ setInterval(() => {
 // 📅 RÉCAP QUOTIDIEN 10H — MATCHS DU JOUR AVEC COTES V1 / Ve
 // ============================================================
 
-// 📡 Récupère les matchs du jour
 async function getMatchesOfDay() {
     try {
-        const today = new Date().toISOString().split('T')[0]; // format YYYY-MM-DD
+        const today = new Date().toISOString().split('T')[0];
         const response = await axios.get(
             `https://v3.football.api-sports.io/fixtures?date=${today}`,
-            {
-                headers: { 'x-apisports-key': apiKey }
-            }
+            { headers: { 'x-apisports-key': apiKey } }
         );
         return response.data.response;
     } catch (err) {
@@ -307,20 +500,16 @@ async function getMatchesOfDay() {
     }
 }
 
-// 📡 Récupère les cotes d'un match (bookmaker = 1 → bet365 par défaut)
 async function getOdds(fixtureId) {
     try {
         const response = await axios.get(
             `https://v3.football.api-sports.io/odds?fixture=${fixtureId}&bookmaker=1`,
-            {
-                headers: { 'x-apisports-key': apiKey }
-            }
+            { headers: { 'x-apisports-key': apiKey } }
         );
 
         const data = response.data.response;
         if (!data || data.length === 0) return null;
 
-        // On cherche le marché "Match Winner" (1X2)
         const bookmaker = data[0]?.bookmakers?.[0];
         if (!bookmaker) return null;
 
@@ -338,7 +527,6 @@ async function getOdds(fixtureId) {
     }
 }
 
-// 📨 Envoi du récap 10h
 async function sendDailyRecap() {
     console.log("📅 Envoi du récap quotidien...");
 
@@ -349,24 +537,22 @@ async function sendDailyRecap() {
         return;
     }
 
-    // On filtre les matchs avec les bonnes cotes
-    // V1 entre 1.90 et 2.50  →  match équilibré légèrement en faveur domicile
-    // Ve entre 2.10 et 4.00  →  victoire extérieure possible mais pas écrasante
-    const V1_MIN = 1.90;
-    const V1_MAX = 2.50;
-    const VE_MIN = 2.10;
-    const VE_MAX = 4.00;
+    const V1_MIN = 1.90, V1_MAX = 2.50;
+    const VE_MIN = 2.10, VE_MAX = 4.00;
 
     let filteredMatches = [];
 
     for (const match of matches) {
+
+        // Grandes ligues uniquement pour le récap aussi
+        if (!estGrandeLigue(match.league.name)) continue;
+
         const fixtureId = match.fixture.id;
         const home = match.teams.home.name;
         const away = match.teams.away.name;
         const league = match.league.name;
         const country = match.league.country;
 
-        // Heure du match (UTC → on affiche telle quelle, Railway tourne en UTC)
         const kickoff = new Date(match.fixture.date);
         const timeStr = kickoff.toLocaleTimeString('fr-FR', {
             hour: '2-digit',
@@ -375,31 +561,25 @@ async function sendDailyRecap() {
         });
 
         const odds = await getOdds(fixtureId);
-
         if (!odds) continue;
 
         const { v1, vN, ve } = odds;
 
-        // Filtre sur les cotes
-        const v1Ok = v1 >= V1_MIN && v1 <= V1_MAX;
-        const veOk = ve >= VE_MIN && ve <= VE_MAX;
-
-        if (v1Ok && veOk) {
+        if (v1 >= V1_MIN && v1 <= V1_MAX && ve >= VE_MIN && ve <= VE_MAX) {
             filteredMatches.push({ home, away, league, country, timeStr, v1, vN, ve });
         }
 
-        // Petite pause pour ne pas surcharger l'API
         await new Promise(r => setTimeout(r, 200));
     }
 
     if (filteredMatches.length === 0) {
-        bot.sendMessage(chatId, "📅 Aucun match ne correspond aux critères de cotes aujourd'hui (V1: 1.90-2.50 / Ve: 2.10-4.00).");
+        bot.sendMessage(chatId, "📅 Aucun match ne correspond aux critères aujourd'hui.");
         return;
     }
 
-    // Construction du message
     let msg = `📅 MATCHS DU JOUR — ${new Date().toLocaleDateString('fr-FR')}\n`;
-    msg += `🎯 Critères: V1 entre 1.90-2.50 | Ve entre 2.10-4.00\n`;
+    msg += `🏆 Grandes ligues européennes uniquement\n`;
+    msg += `🎯 V1: 1.90-2.50 | Ve: 2.10-4.00\n`;
     msg += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
     for (const m of filteredMatches) {
@@ -416,8 +596,7 @@ async function sendDailyRecap() {
     console.log(`📅 Récap envoyé — ${filteredMatches.length} match(s)`);
 }
 
-// ⏰ Scheduler 10h00 (heure de Paris)
-// Vérifie toutes les minutes si on est à 10h00
+// ⏰ Scheduler 10h00 Paris
 setInterval(() => {
     const now = new Date();
     const parisTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
