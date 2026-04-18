@@ -329,6 +329,130 @@ function analyseMatch(match) {
 }
 
 // ============================================================
+// 🔬 SIGNAL XG AVANCÉ — Différentiel + Frustration + Combo
+// ============================================================
+
+function analyseXGAvance(match) {
+    const home = match.teams.home.name;
+    const away = match.teams.away.name;
+    const homeGoals = match.goals.home;
+    const awayGoals = match.goals.away;
+    const league = match.league.name;
+    const fixtureId = match.fixture.id;
+
+    const stats = match.statistics;
+    if (!stats) return null;
+
+    const homeStats = stats.find(t => t.team.name === home);
+    const awayStats = stats.find(t => t.team.name === away);
+    if (!homeStats || !awayStats) return null;
+
+    const getStat = (team, type) =>
+        team.statistics.find(s => s.type === type)?.value || 0;
+
+    const homeXG = parseFloat(getStat(homeStats, "Expected Goals")) || 0;
+    const awayXG = parseFloat(getStat(awayStats, "Expected Goals")) || 0;
+    const homePoss = parseInt(getStat(homeStats, "Ball Possession"));
+    const homeShots = getStat(homeStats, "Total Shots");
+    const homeOnTarget = getStat(homeStats, "Shots on Goal");
+
+    // ── Calculs clés ──
+    const xgDiff = homeXG - awayXG;               // Différentiel xG
+    const xgRatio = awayXG > 0 ? homeXG / awayXG : homeXG * 10; // Ratio domicile/extérieur
+    const xgFrustration = homeXG >= 1.0 && homeGoals === 0;      // xG élevé mais 0 but
+    const domination = homePoss >= 58 && homeOnTarget >= 4 && homeXG >= 1.0;
+
+    // ── Scoring ──
+    let score = 0;
+    let signaux = [];
+    let typeSignal = null;
+
+    // 1. FRUSTRATION xG — équipe qui aurait dû marquer
+    if (xgFrustration) {
+        score += 40;
+        signaux.push(`😤 Frustration xG: ${homeXG} xG pour 0 but — retour statistique probable`);
+    }
+
+    // 2. DIFFÉRENTIEL xG fort
+    if (xgDiff >= 0.8) {
+        score += 30;
+        signaux.push(`📈 Différentiel xG: +${xgDiff.toFixed(2)} en faveur de ${home}`);
+    } else if (xgDiff >= 0.5) {
+        score += 15;
+        signaux.push(`📊 Différentiel xG: +${xgDiff.toFixed(2)} en faveur de ${home}`);
+    }
+
+    // 3. RATIO xG — domicile domine clairement
+    if (xgRatio >= 2) {
+        score += 25;
+        signaux.push(`⚡ Ratio xG x${xgRatio.toFixed(1)}: domination écrasante de ${home}`);
+    }
+
+    // 4. COMBO xG + possession + cadrés
+    if (domination) {
+        score += 25;
+        signaux.push(`🎯 Combo parfait: xG ${homeXG} + Poss ${homePoss}% + ${homeOnTarget} cadrés`);
+    }
+
+    // 5. CONTEXTE SCORE — équipe qui pousse car derrière ou à égalité
+    if (homeGoals <= awayGoals && xgDiff > 0) {
+        score += 15;
+        signaux.push(`🔥 Contexte score: ${home} pousse (${homeGoals}-${awayGoals})`);
+    }
+
+    // 6. PIÈGE — équipe qui mène confortablement → moins de motivation
+    if (homeGoals >= 2 && homeGoals > awayGoals) {
+        score -= 30;
+        signaux.push(`⚠️ Attention: ${home} mène déjà ${homeGoals}-${awayGoals} → risque de relâchement`);
+    }
+
+    // Seuil minimum pour envoyer un signal
+    if (score < 55) return null;
+
+    // Niveau du signal
+    let niveau = "";
+    if (score >= 90) {
+        niveau = "🔬🔬 XG ELITE 🔬🔬";
+        typeSignal = "xg_elite";
+    } else if (score >= 75) {
+        niveau = "🔬 XG PREMIUM 🔬";
+        typeSignal = "xg_premium";
+    } else {
+        niveau = "📊 XG SIGNAL 📊";
+        typeSignal = "xg_signal";
+    }
+
+    const mise = getMiseOptimale();
+    const { recommandation } = getConseil(typeSignal, league, homePoss, homeXG, homeShots);
+
+    let msg = `🏆 ${league}\n\n`;
+    msg += `${niveau}\n\n`;
+    msg += `⚽ ${home} ${homeGoals} - ${awayGoals} ${away}\n`;
+    msg += `⏱️ MI-TEMPS\n\n`;
+    msg += `🔬 *Analyse xG avancée:*\n`;
+    msg += `👉 xG ${home}: *${homeXG}*\n`;
+    msg += `👉 xG ${away}: *${awayXG}*\n`;
+    msg += `👉 Différentiel: *+${xgDiff.toFixed(2)}*\n`;
+    msg += `👉 Ratio: *x${xgRatio.toFixed(1)}*\n\n`;
+    msg += `📊 *Signaux détectés:*\n`;
+    signaux.forEach(s => { msg += `${s}\n`; });
+    msg += `\n${recommandation}\n`;
+    msg += `💡 Score de confiance: *${Math.min(score, 99)}%*\n`;
+    msg += `💰 Mise suggérée: ${mise}% (≈ ${(bankroll * mise / 100).toFixed(2)}€)\n\n`;
+    msg += `🎯 *PARI: But de ${home}*\n\n`;
+    msg += `👇 *Tu prends ce pari ?*`;
+
+    return {
+        message: msg,
+        signalType: typeSignal,
+        fixtureId,
+        league,
+        scoreConseil: score,
+        data: { homeShots, homeOnTarget, homePoss, homeXG, awayXG, xgDiff, home, away, homeGoals, awayGoals }
+    };
+}
+
+// ============================================================
 // 📨 ENVOI SIGNAL AVEC BOUTONS OUI / NON
 // ============================================================
 
@@ -764,13 +888,27 @@ setInterval(async () => {
     for (const match of halfMatches) {
         const matchId = match.fixture.id;
         if (!sentMatches.includes(matchId)) {
+
+            // Signal classique (possession/tirs/xG)
             const result = analyseMatch(match);
             if (result) {
                 envoyerSignalAvecBoutons(result);
                 fs.appendFileSync("history.txt", result.message + "\n\n");
-                sentMatches.push(matchId);
-                saveData();
             }
+
+            // Signal xG avancé (différentiel + frustration + combo)
+            const resultXG = analyseXGAvance(match);
+            if (resultXG) {
+                // Éviter doublon si signal classique déjà envoyé sur même match
+                const dejaEnvoye = result !== null;
+                if (!dejaEnvoye || resultXG.scoreConseil > (result?.scoreConseil || 0) + 20) {
+                    envoyerSignalAvecBoutons(resultXG);
+                    fs.appendFileSync("history.txt", resultXG.message + "\n\n");
+                }
+            }
+
+            sentMatches.push(matchId);
+            saveData();
         }
     }
 }, 60000);
