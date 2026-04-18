@@ -374,11 +374,11 @@ function analyseXGAvance(match) {
     const homeShots = getStat(homeStats, "Total Shots");
     const homeOnTarget = getStat(homeStats, "Shots on Goal");
 
-    // ── Calculs clés ──
-    const xgDiff = homeXG - awayXG;               // Différentiel xG
-    const xgRatio = awayXG > 0 ? homeXG / awayXG : homeXG * 10; // Ratio domicile/extérieur
-    const xgFrustration = homeXG >= 1.0 && homeGoals === 0;      // xG élevé mais 0 but
-    const domination = homePoss >= 58 && homeOnTarget >= 4 && homeXG >= 1.0;
+    // ── Calculs clés — utilise TES réglages personnalisés ──
+    const xgDiff = homeXG - awayXG;
+    const xgRatio = awayXG > 0 ? homeXG / awayXG : homeXG * 10;
+    const xgFrustration = homeXG >= minXG && homeGoals === 0;  // basé sur TON seuil xG
+    const domination = homePoss >= minPossession && homeOnTarget >= minOnTarget && homeXG >= minXG;
 
     // ── Scoring ──
     let score = 0;
