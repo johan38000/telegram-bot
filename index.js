@@ -8,7 +8,25 @@ const token = process.env.TELEGRAM_BOT_TOKEN;
 const apiKey = process.env.API_KEY;
 const chatId = "1633310404";
 
-const bot = new TelegramBot(token, { polling: true });
+const bot = new TelegramBot(token, {
+    polling: {
+        autoStart: false,
+        params: { timeout: 10 }
+    }
+});
+
+// Forcer l'arrêt de toute instance précédente avant de démarrer
+bot.stopPolling().then(() => {
+    setTimeout(() => {
+        bot.startPolling();
+        console.log("✅ Polling démarré proprement");
+    }, 3000);
+}).catch(() => {
+    setTimeout(() => {
+        bot.startPolling();
+        console.log("✅ Polling démarré");
+    }, 3000);
+});
 
 console.log("🔥 BOT FINAL LANCÉ");
 
