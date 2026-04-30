@@ -78,6 +78,9 @@ let modePrudent = false;   // Mode prudent si série perdante
 // Matchs suivis { fixtureId: { v1Odds, v2Odds, homeTeam, awayTeam, league, goalsHome, goalsAway, signalEnvoye } }
 let matchsSuivis = {};
 
+// Paris en attente de résultat
+let pendingResults = [];
+
 loadData();
 
 // ============================================================
@@ -171,20 +174,81 @@ async function getMatchesOfDay() {
 
 async function getOdds(fixtureId) {
     try {
+        // Bookmaker 1xbet = ID 8 sur api-football
         const response = await axios.get(
-            `https://v3.football.api-sports.io/odds?fixture=${fixtureId}&bookmaker=1`,
+            `https://v3.football.api-sports.io/odds?fixture=${fixtureId}&bookmaker=8`,
             { headers: { 'x-apisports-key': apiKey } }
         );
         const data = response.data.response;
-        if (!data || data.length === 0) return null;
-        const bookmaker = data[0]?.bookmakers?.[0];
-        if (!bookmaker) return null;
-        const market = bookmaker.bets.find(b => b.name === "Match Winner");
-        if (!market) return null;
-        const v1 = parseFloat(market.values.find(v => v.value === "Home")?.odd);
-        const vN = parseFloat(market.values.find(v => v.value === "Draw")?.odd);
-        const v2 = parseFloat(market.values.find(v => v.value === "Away")?.odd);
-        return { v1, vN, v2 };
+
+        // Si 1xbet pas disponible → fallback sur bookmaker 1 (bet365)
+        let bookmakerData = data?.[0]?.bookmakers?.find(b => b.id === 8);
+        if (!bookmakerData) {
+            const response2 = await axios.get(
+                `https://v3.football.api-sports.io/odds?fixture=${fixtureId}&bookmaker=1`,
+                { headers: { 'x-apisports-key': apiKey } }
+            );
+            const data2 = response2.data.response;
+            bookmakerData = data2?.[0]?.bookmakers?.[0];
+        }
+        if (!bookmakerData) return null;
+
+        // Cote Match Winner (V1/N/V2)
+        const marketWinner = bookmakerData.bets.find(b => b.name === "Match Winner");
+        if (!marketWinner) return null;
+        const v1 = parseFloat(marketWinner.values.find(v => v.value === "Home")?.odd);
+        const vN = parseFloat(marketWinner.values.find(v => v.value === "Draw")?.odd);
+        const v2 = parseFloat(marketWinner.values.find(v => v.value === "Away")?.odd);
+
+        return { v1, vN, v2, bookmakerName: bookmakerData.name };
+    } catch (err) {
+        return null;
+    }
+}
+
+// Récupère la cote "Next Goal" V1 — marché spécifique
+async function getNextGoalOdds(fixtureId, homeTeam) {
+    try {
+        // Essai 1xbet (id=8) puis bet365 (id=1)
+        const bookmakerIds = [8, 1, 6, 11];
+        
+        for (const bookId of bookmakerIds) {
+            const response = await axios.get(
+                `https://v3.football.api-sports.io/odds?fixture=${fixtureId}&bookmaker=${bookId}`,
+                { headers: { 'x-apisports-key': apiKey } }
+            );
+            const data = response.data.response;
+            if (!data || data.length === 0) continue;
+
+            const bookmaker = data[0]?.bookmakers?.[0];
+            if (!bookmaker) continue;
+
+            // Chercher le marché Next Goal (plusieurs noms possibles selon bookmaker)
+            const nextGoalMarket = bookmaker.bets.find(b =>
+                b.name === "Next Goal" ||
+                b.name === "Next Team To Score" ||
+                b.name === "First Goal Scorer" ||
+                b.name === "To Score Next Goal"
+            );
+
+            if (nextGoalMarket) {
+                // Chercher la cote pour l'équipe à domicile
+                const homeOdd = nextGoalMarket.values.find(v =>
+                    v.value === "Home" ||
+                    v.value === homeTeam ||
+                    v.value?.toLowerCase().includes("home")
+                );
+
+                if (homeOdd) {
+                    return {
+                        cote: parseFloat(homeOdd.odd),
+                        bookmaker: bookmaker.name,
+                        marche: nextGoalMarket.name
+                    };
+                }
+            }
+        }
+        return null; // Pas disponible
     } catch (err) {
         return null;
     }
@@ -318,7 +382,7 @@ setInterval(async () => {
                     league: suivi.league,
                     v1: suivi.v1,
                     v2: suivi.v2,
-                    coteV1Live: bet.coteV1Live || suivi.v1,
+                    coteNextGoal: bet.coteNextGoal || null,
                     goalsHomeAtSignal: bet.goalsHomeAtSignal,
                     goalsFinal: goalsHome,
                     minuteSignal: bet.minuteSignal,
@@ -366,20 +430,25 @@ setInterval(async () => {
                 msg += `👉 N: ${suivi.vN}\n`;
                 msg += `👉 V2 (${suivi.away}): ${suivi.v2}\n\n`;
                 msg += `${leagueInfo}\n\n`;
-                // Récupérer la cote V1 live au moment du signal
-                let coteV1Live = suivi.v1;
+                // Récupérer la cote "Next Goal V1" au moment du signal
+                let coteNextGoal = null;
+                let coteSource = "";
                 try {
-                    const oddsLive = await getOdds(fixtureId);
-                    if (oddsLive && oddsLive.v1) coteV1Live = oddsLive.v1;
+                    const nextGoalData = await getNextGoalOdds(fixtureId, suivi.home);
+                    if (nextGoalData) {
+                        coteNextGoal = nextGoalData.cote;
+                        coteSource = nextGoalData.bookmaker;
+                    }
                 } catch(e) {}
 
                 msg += `🎯 *PARI: ${suivi.home} marque le prochain but*\n`;
-                msg += `📈 Cote V1 actuelle: *${coteV1Live}*\n\n`;
+                if (coteNextGoal) {
+                    msg += `📈 Cote "Prochain but V1": *${coteNextGoal}* (${coteSource})\n\n`;
+                } else {
+                    msg += `📈 Cote non disponible via API — consulte directement 1xbet ou ton bookmaker\n\n`;
+                }
                 msg += `💡 V1 va pousser pour égaliser !\n\n`;
                 msg += `👇 *Tu prends ce pari ?*`;
-
-                // Sauvegarder la cote live pour le récap
-                pendingResults[pendingResults.length - 1].coteV1Live = coteV1Live;
 
                 const keyboard = {
                     inline_keyboard: [[
@@ -391,12 +460,12 @@ setInterval(async () => {
                 bot.sendMessage(chatId, msg, { parse_mode: "Markdown", reply_markup: keyboard });
                 fs.appendFileSync("history.txt", msg + "\n\n");
 
-                // Enregistrer pour suivi résultat
+                // Enregistrer pour suivi résultat APRÈS envoi du message
                 pendingResults.push({
                     fixtureId,
                     goalsHomeAtSignal: goalsHome,
                     minuteSignal: minute,
-                    coteV1Live: suivi.v1, // sera mis à jour juste après
+                    coteNextGoal: coteNextGoal || null,
                     prisParUtilisateur: null,
                     checked: false
                 });
@@ -416,9 +485,6 @@ setInterval(async () => {
         }
     }
 }, 60000);
-
-// Paris en attente de résultat
-let pendingResults = [];
 
 // ============================================================
 // 🎮 GESTION BOUTONS OUI / NON
@@ -496,7 +562,8 @@ bot.on('callback_query', async (query) => {
         let msg = "📈 *TES 10 DERNIERS PARIS*\n\n";
         derniers.forEach((r, i) => {
             msg += `${i + 1}. ${r.win ? "✅ WIN" : "❌ LOSE"} — *${r.home}* vs ${r.away}\n`;
-            msg += `   Cote V1 au signal: ${r.coteV1Live || r.v1} | Minute: ${r.minuteSignal}'\n\n`;
+            const coteAff = r.coteNextGoal ? `Cote prochain but: ${r.coteNextGoal}` : "Cote N/A";
+            msg += `   ${coteAff} | Minute: ${r.minuteSignal}'\n\n`;
         });
         bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
     }
@@ -627,8 +694,9 @@ async function sendNightReport() {
         aujourdhui.forEach((r, i) => {
             const decision = r.prisParUtilisateur ? "✅ Pris" : "❌ Refusé";
             const resultat = r.win ? "🟢 Victoire" : "🔴 Perdu";
+            const coteAff = r.coteNextGoal ? `Cote: ${r.coteNextGoal}` : "Cote N/A";
             msg += `${i + 1}. *${r.home}* vs ${r.away}\n`;
-            msg += `   ${decision} | Cote: ${r.coteV1Live || r.v1} | Min: ${r.minuteSignal}'\n`;
+            msg += `   ${decision} | ${coteAff} | Min: ${r.minuteSignal}'\n`;
             msg += `   ${resultat}\n\n`;
         });
 
