@@ -401,11 +401,11 @@ setInterval(async () => {
             continue;
         }
 
-        // ── Détection but V2 ──
-        // V2 = équipe extérieure (awayTeam)
+        // ── Détection but V2 — uniquement si score passe à 0-1 ──
         const butV2Detecte = goalsAway > suivi.goalsAway;
+        const scoreEstZeroUn = goalsHome === 0 && goalsAway === 1;
 
-        if (butV2Detecte && !suivi.signalEnvoye) {
+        if (butV2Detecte && scoreEstZeroUn && !suivi.signalEnvoye) {
             suivi.signalEnvoye = true;
             suivi.goalsHome = goalsHome;
             suivi.goalsAway = goalsAway;
