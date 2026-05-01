@@ -354,28 +354,47 @@ setInterval(async () => {
             // Chercher les paris en attente pour ce match
             const betsForMatch = pendingResults.filter(b => b.fixtureId === fixtureId && !b.checked);
             for (let bet of betsForMatch) {
-                const win = goalsHome > bet.goalsHomeAtSignal;
+                // WIN = V1 a marqué au moins 1 but après le signal
+                const v1AMarque = goalsHome > bet.goalsHomeAtSignal;
+                const win = v1AMarque;
                 bet.checked = true;
 
+                // Vérifier si V1 a bien marqué après le signal
+                const v1AMarque = goalsHome > bet.goalsHomeAtSignal;
+
                 if (bet.prisParUtilisateur) {
-                    bot.sendMessage(chatId,
-                        `${win ? "✅ WIN !" : "❌ LOSE"}\n\n` +
-                        `⚽ *${suivi.home}* vs ${suivi.away}\n` +
-                        `📊 Score final: ${goalsHome} - ${goalsAway}\n` +
-                        `📊 V1: ${suivi.v1} | V2: ${suivi.v2}\n\n` +
-                        `${win ? "🎉 Bien joué !" : "😕 Pas de chance, on continue !"}`,
-                        { parse_mode: "Markdown" }
-                    );
+                    let msg = `${win ? "✅ WIN !" : "❌ LOSE"}
+
+`;
+                    msg += `⚽ *${suivi.home}* vs *${suivi.away}*
+`;
+                    msg += `📊 Score final: *${goalsHome} - ${goalsAway}*
+`;
+                    msg += `📊 V1 de départ: ${suivi.v1} | V2: ${suivi.v2}
+
+`;
+                    msg += `${v1AMarque ? `🎯 V1 (${suivi.home}) a bien marqué !` : `❌ V1 (${suivi.home}) n'a pas marqué`}
+
+`;
+                    msg += `${win ? "🎉 Bien joué !" : "😕 Pas de chance, on continue !"}`;
+                    bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
                 } else {
-                    bot.sendMessage(chatId,
-                        `📊 *Résultat du pari refusé:*\n\n` +
-                        `⚽ *${suivi.home}* vs ${suivi.away}\n` +
-                        `${win ? "✅ Aurait été un WIN 🤔" : "❌ Aurait été un LOSE ✅ Bonne décision !"}`,
-                        { parse_mode: "Markdown" }
-                    );
+                    let msg = `📊 *Résultat — pari refusé:*
+
+`;
+                    msg += `⚽ *${suivi.home}* vs *${suivi.away}*
+`;
+                    msg += `📊 Score final: *${goalsHome} - ${goalsAway}*
+
+`;
+                    msg += `${v1AMarque ? `🎯 V1 (${suivi.home}) a marqué` : `❌ V1 (${suivi.home}) n'a pas marqué`}
+`;
+                    msg += `${win ? "✅ Aurait été un WIN 🤔" : "✅ Bonne décision de passer !"}`;
+                    bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
                 }
 
-                results.push({
+                // Enregistrer le résultat dans l'historique
+                const resultEntry = {
                     fixtureId,
                     home: suivi.home,
                     away: suivi.away,
@@ -385,14 +404,22 @@ setInterval(async () => {
                     coteNextGoal: bet.coteNextGoal || null,
                     goalsHomeAtSignal: bet.goalsHomeAtSignal,
                     goalsFinal: goalsHome,
+                    scoreFinal: `${goalsHome}-${goalsAway}`,
                     minuteSignal: bet.minuteSignal,
                     prisParUtilisateur: bet.prisParUtilisateur,
+                    v1AMarque,
                     win,
                     timestamp: Date.now()
-                });
+                };
 
-                updateLeagueStats(suivi.league, win);
-                verifierSeriePerdante();
+                results.push(resultEntry);
+                console.log(`📊 Résultat enregistré: ${suivi.home} vs ${suivi.away} — ${win ? "WIN ✅" : "LOSE ❌"} — Pris: ${bet.prisParUtilisateur}`);
+
+                // Mettre à jour stats uniquement sur les paris pris
+                if (bet.prisParUtilisateur) {
+                    updateLeagueStats(suivi.league, win);
+                    verifierSeriePerdante();
+                }
             }
 
             // Nettoyer le match suivi
@@ -475,14 +502,137 @@ setInterval(async () => {
             }
         }
 
+        // ── Si V2 marque un 2ème but → LOSE immédiat ──
+        // V1 n'a pas marqué le prochain but
+        if (suivi.signalEnvoye && goalsAway > suivi.goalsAway) {
+            const betsForMatch = pendingResults.filter(b => b.fixtureId === fixtureId && !b.checked);
+            for (let bet of betsForMatch) {
+                if (bet.prisParUtilisateur === null) continue; // pas encore de décision
+                bet.checked = true;
+
+                if (bet.prisParUtilisateur) {
+                    bot.sendMessage(chatId,
+                        `❌ *LOSE — V2 a marqué en premier !*
+
+` +
+                        `⚽ *${suivi.home}* ${goalsHome} - ${goalsAway} *${suivi.away}*
+` +
+                        `🕐 Minute: ${minute}'
+
+` +
+                        `❌ V1 n'a pas marqué le prochain but
+` +
+                        `😕 Pas de chance, on continue !`,
+                        { parse_mode: "Markdown" }
+                    );
+                } else {
+                    bot.sendMessage(chatId,
+                        `📊 *Résultat — pari refusé:*
+
+` +
+                        `⚽ *${suivi.home}* ${goalsHome} - ${goalsAway} *${suivi.away}*
+` +
+                        `❌ V2 a marqué en premier — aurait été un LOSE
+` +
+                        `✅ Bonne décision de passer !`,
+                        { parse_mode: "Markdown" }
+                    );
+                }
+
+                results.push({
+                    fixtureId,
+                    home: suivi.home,
+                    away: suivi.away,
+                    league: suivi.league,
+                    v1: suivi.v1,
+                    v2: suivi.v2,
+                    coteNextGoal: bet.coteNextGoal || null,
+                    goalsHomeAtSignal: bet.goalsHomeAtSignal,
+                    goalsFinal: goalsHome,
+                    scoreFinal: `${goalsHome}-${goalsAway}`,
+                    minuteSignal: bet.minuteSignal,
+                    prisParUtilisateur: bet.prisParUtilisateur,
+                    v1AMarque: false,
+                    win: false,
+                    loseRaison: "V2 a marqué en premier",
+                    timestamp: Date.now()
+                });
+
+                if (bet.prisParUtilisateur) {
+                    updateLeagueStats(suivi.league, false);
+                    verifierSeriePerdante();
+                }
+
+                saveData();
+            }
+        }
+
+        // ── Si V1 marque → WIN immédiat ──
+        if (suivi.signalEnvoye && goalsHome > suivi.goalsHome) {
+            const betsForMatch = pendingResults.filter(b => b.fixtureId === fixtureId && !b.checked);
+            for (let bet of betsForMatch) {
+                if (bet.prisParUtilisateur === null) continue;
+                bet.checked = true;
+
+                if (bet.prisParUtilisateur) {
+                    bot.sendMessage(chatId,
+                        `✅ *WIN — V1 a marqué !*
+
+` +
+                        `⚽ *${suivi.home}* ${goalsHome} - ${goalsAway} *${suivi.away}*
+` +
+                        `🕐 Minute: ${minute}'
+
+` +
+                        `🎯 V1 (${suivi.home}) a marqué le prochain but !
+` +
+                        `🎉 Bien joué !`,
+                        { parse_mode: "Markdown" }
+                    );
+                } else {
+                    bot.sendMessage(chatId,
+                        `📊 *Résultat — pari refusé:*
+
+` +
+                        `⚽ *${suivi.home}* ${goalsHome} - ${goalsAway} *${suivi.away}*
+` +
+                        `✅ V1 a marqué — aurait été un WIN
+` +
+                        `🤔 A retenir pour la prochaine fois !`,
+                        { parse_mode: "Markdown" }
+                    );
+                }
+
+                results.push({
+                    fixtureId,
+                    home: suivi.home,
+                    away: suivi.away,
+                    league: suivi.league,
+                    v1: suivi.v1,
+                    v2: suivi.v2,
+                    coteNextGoal: bet.coteNextGoal || null,
+                    goalsHomeAtSignal: bet.goalsHomeAtSignal,
+                    goalsFinal: goalsHome,
+                    scoreFinal: `${goalsHome}-${goalsAway}`,
+                    minuteSignal: bet.minuteSignal,
+                    prisParUtilisateur: bet.prisParUtilisateur,
+                    v1AMarque: true,
+                    win: true,
+                    timestamp: Date.now()
+                });
+
+                if (bet.prisParUtilisateur) {
+                    updateLeagueStats(suivi.league, true);
+                    verifierSeriePerdante();
+                }
+
+                saveData();
+            }
+        }
+
         // Mettre à jour le score suivi
         suivi.goalsHome = goalsHome;
         suivi.goalsAway = goalsAway;
-
-        // Réinitialiser signalEnvoye si V2 marque encore un autre but
-        if (goalsAway > suivi.goalsAway + 1) {
-            suivi.signalEnvoye = false;
-        }
     }
 }, 60000);
 
