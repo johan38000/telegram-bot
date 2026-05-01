@@ -355,8 +355,7 @@ setInterval(async () => {
             const betsForMatch = pendingResults.filter(b => b.fixtureId === fixtureId && !b.checked);
             for (let bet of betsForMatch) {
                 // WIN = V1 a marqué au moins 1 but après le signal
-                const v1AMarque = goalsHome > bet.goalsHomeAtSignal;
-                const win = v1AMarque;
+                const win = goalsHome > bet.goalsHomeAtSignal;
                 bet.checked = true;
 
                 // Vérifier si V1 a bien marqué après le signal
