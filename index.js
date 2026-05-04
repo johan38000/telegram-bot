@@ -130,10 +130,28 @@ function updateLeagueStats(league, win) {
 // ============================================================
 
 const GRANDES_LIGUES = [
-    "Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1",
-    "Eredivisie", "Primeira Liga", "Champions League", "Europa League",
-    "Conference League", "Championship", "Serie B", "2. Bundesliga",
-    "Ligue 2", "La Liga2"
+    // Angleterre
+    "Premier League", "Championship", "FA Cup", "EFL Cup",
+    // Espagne
+    "La Liga", "La Liga2", "Copa del Rey",
+    // Italie
+    "Serie A", "Serie B", "Coppa Italia",
+    // Allemagne
+    "Bundesliga", "2. Bundesliga", "DFB Pokal",
+    // France
+    "Ligue 1", "Ligue 2", "Coupe de France",
+    // Pays-Bas
+    "Eredivisie", "Eerste Divisie",
+    // Portugal
+    "Primeira Liga", "Liga Portugal 2",
+    // UEFA
+    "Champions League", "Europa League", "Conference League",
+    // Belgique
+    "First Division A", "Pro League",
+    // Turquie
+    "Super Lig",
+    // Ecosse
+    "Premiership"
 ];
 
 function estGrandeLigue(leagueName) {
