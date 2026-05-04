@@ -6,6 +6,7 @@ const fs = require('fs');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const apiKey = process.env.API_KEY;
+const oddsApiKey = process.env.ODDS_API_KEY;
 const chatId = "1633310404";
 
 const bot = new TelegramBot(token, {
@@ -206,50 +207,76 @@ async function getOdds(fixtureId) {
     }
 }
 
-// Récupère la cote "Next Goal" V1 — marché spécifique
+// Récupère la cote "Next Goal" V1 via The Odds API
 async function getNextGoalOdds(fixtureId, homeTeam) {
     try {
-        // Essai 1xbet (id=8) puis bet365 (id=1)
-        const bookmakerIds = [8, 1, 6, 11];
-        
-        for (const bookId of bookmakerIds) {
-            const response = await axios.get(
-                `https://v3.football.api-sports.io/odds?fixture=${fixtureId}&bookmaker=${bookId}`,
-                { headers: { 'x-apisports-key': apiKey } }
-            );
-            const data = response.data.response;
-            if (!data || data.length === 0) continue;
+        if (!oddsApiKey) return null;
 
-            const bookmaker = data[0]?.bookmakers?.[0];
-            if (!bookmaker) continue;
+        // The Odds API — marché "next_goal" ou "h2h" selon disponibilité
+        // On cherche d'abord avec le nom des équipes via l'API football pour avoir le sport_event_id
+        const response = await axios.get(
+            `https://api.the-odds-api.com/v4/sports/soccer/odds/`,
+            {
+                params: {
+                    apiKey: oddsApiKey,
+                    regions: 'eu',
+                    markets: 'h2h,next_goal',
+                    oddsFormat: 'decimal',
+                    bookmakers: 'onexbet,bet365,unibet'
+                }
+            }
+        );
 
-            // Chercher le marché Next Goal (plusieurs noms possibles selon bookmaker)
-            const nextGoalMarket = bookmaker.bets.find(b =>
-                b.name === "Next Goal" ||
-                b.name === "Next Team To Score" ||
-                b.name === "First Goal Scorer" ||
-                b.name === "To Score Next Goal"
+        const games = response.data;
+        if (!games || games.length === 0) return null;
+
+        // Chercher le match par nom d'équipe domicile
+        const game = games.find(g =>
+            g.home_team?.toLowerCase().includes(homeTeam.toLowerCase()) ||
+            homeTeam.toLowerCase().includes(g.home_team?.toLowerCase())
+        );
+
+        if (!game) return null;
+
+        // Chercher le marché "next_goal"
+        for (const bookmaker of game.bookmakers) {
+            const nextGoalMarket = bookmaker.markets.find(m =>
+                m.key === "next_goal" ||
+                m.key === "next_team_to_score"
             );
 
             if (nextGoalMarket) {
-                // Chercher la cote pour l'équipe à domicile
-                const homeOdd = nextGoalMarket.values.find(v =>
-                    v.value === "Home" ||
-                    v.value === homeTeam ||
-                    v.value?.toLowerCase().includes("home")
+                const homeOutcome = nextGoalMarket.outcomes.find(o =>
+                    o.name === "Home" ||
+                    o.name?.toLowerCase().includes(homeTeam.toLowerCase())
                 );
 
-                if (homeOdd) {
+                if (homeOutcome) {
                     return {
-                        cote: parseFloat(homeOdd.odd),
-                        bookmaker: bookmaker.name,
-                        marche: nextGoalMarket.name
+                        cote: parseFloat(homeOutcome.price.toFixed(2)),
+                        bookmaker: bookmaker.title,
+                        marche: "Prochain but V1"
+                    };
+                }
+            }
+
+            // Fallback — cote victoire V1 si next_goal pas dispo
+            const h2hMarket = bookmaker.markets.find(m => m.key === "h2h");
+            if (h2hMarket) {
+                const homeOutcome = h2hMarket.outcomes.find(o => o.name === "Home" || o.name === game.home_team);
+                if (homeOutcome) {
+                    return {
+                        cote: parseFloat(homeOutcome.price.toFixed(2)),
+                        bookmaker: bookmaker.title,
+                        marche: "Victoire V1 (next goal indispo)"
                     };
                 }
             }
         }
-        return null; // Pas disponible
+
+        return null;
     } catch (err) {
+        console.log("Erreur The Odds API:", err.message);
         return null;
     }
 }
