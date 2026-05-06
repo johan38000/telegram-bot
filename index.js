@@ -82,6 +82,9 @@ let matchsSuivis = {};
 // Paris en attente de résultat
 let pendingResults = [];
 
+// Paris en attente de saisie de cote { chatId: { fixtureId, home, away } }
+let pendingCote = null;
+
 loadData();
 
 // ============================================================
@@ -129,35 +132,16 @@ function updateLeagueStats(league, win) {
 // 🏆 GRANDES LIGUES
 // ============================================================
 
-const GRANDES_LIGUES = [
-    // Angleterre
-    "Premier League", "Championship", "FA Cup", "EFL Cup",
-    // Espagne
-    "La Liga", "La Liga2", "Copa del Rey",
-    // Italie
-    "Serie A", "Serie B", "Coppa Italia",
-    // Allemagne
-    "Bundesliga", "2. Bundesliga", "DFB Pokal",
-    // France
-    "Ligue 1", "Ligue 2", "Coupe de France",
-    // Pays-Bas
-    "Eredivisie", "Eerste Divisie",
-    // Portugal
-    "Primeira Liga", "Liga Portugal 2",
-    // UEFA
-    "Champions League", "Europa League", "Conference League",
-    // Belgique
-    "First Division A", "Pro League",
-    // Turquie
-    "Super Lig",
-    // Ecosse
-    "Premiership"
+// Filtre par pays — beaucoup plus fiable que par nom de ligue
+const PAYS_AUTORISES = [
+    "england", "spain", "italy", "germany", "france",
+    "netherlands", "portugal", "scotland", "belgium",
+    "turkey", "world" // world = compétitions UEFA
 ];
 
-function estGrandeLigue(leagueName) {
-    return GRANDES_LIGUES.some(l =>
-        leagueName.toLowerCase().includes(l.toLowerCase())
-    );
+function estGrandeLigue(leagueName, country) {
+    if (!country) return false;
+    return PAYS_AUTORISES.includes(country.toLowerCase());
 }
 
 // ============================================================
@@ -316,7 +300,7 @@ async function sendDailyRecap() {
     let filteredMatches = [];
 
     for (const match of matches) {
-        if (!estGrandeLigue(match.league.name)) continue;
+        if (!estGrandeLigue(match.league.name, match.league.country)) continue;
 
         const fixtureId = match.fixture.id;
         const home = match.teams.home.name;
@@ -731,14 +715,29 @@ bot.on('callback_query', async (query) => {
         const tauxPris = prisParMoi.length > 0 ? Math.round((prisParMoi.filter(r => r.win).length / prisParMoi.length) * 100) : "—";
         const tauxNonPris = nonPris.length > 0 ? Math.round((nonPris.filter(r => r.win).length / nonPris.length) * 100) : "—";
 
-        bot.sendMessage(chatId,
-            `📊 *STATS*\n\n` +
-            `✅ Paris pris: ${prisParMoi.length} → *${tauxPris}%* de réussite\n` +
-            `❌ Paris refusés: ${nonPris.length} → *${tauxNonPris}%* auraient gagné\n\n` +
-            `🛡️ Mode prudent: ${modePrudent ? "ACTIF ⚠️" : "Inactif ✅"}\n` +
-            `📡 Matchs surveillés: ${Object.keys(matchsSuivis).length}`,
-            { parse_mode: "Markdown" }
-        );
+        // Rentabilité globale
+        const avecCote = prisParMoi.filter(r => r.coteNextGoal);
+        const gainGlobal = avecCote.reduce((total, r) => {
+            return total + (r.win ? (r.coteNextGoal - 1) * 10 : -10);
+        }, 0);
+        const coteMoyenne = avecCote.length > 0
+            ? (avecCote.reduce((a, r) => a + r.coteNextGoal, 0) / avecCote.length).toFixed(2)
+            : "—";
+
+        let statsMsg = `📊 *STATS GLOBALES*\n\n`;
+        statsMsg += `✅ Paris pris: ${prisParMoi.length} → *${tauxPris}%* de réussite\n`;
+        statsMsg += `❌ Paris refusés: ${nonPris.length} → *${tauxNonPris}%* auraient gagné\n\n`;
+
+        if (avecCote.length > 0) {
+            statsMsg += `💰 *Rentabilité (base 10€/pari):*\n`;
+            statsMsg += `${gainGlobal >= 0 ? `✅ +${gainGlobal.toFixed(2)}€` : `❌ ${gainGlobal.toFixed(2)}€`} sur ${avecCote.length} paris\n`;
+            statsMsg += `📈 Cote moyenne: ${coteMoyenne}\n\n`;
+        }
+
+        statsMsg += `🛡️ Mode prudent: ${modePrudent ? "ACTIF ⚠️" : "Inactif ✅"}\n`;
+        statsMsg += `📡 Matchs surveillés: ${Object.keys(matchsSuivis).length}`;
+
+        bot.sendMessage(chatId, statsMsg, { parse_mode: "Markdown" });
     }
 
     else if (data === "menu_recap") {
@@ -885,14 +884,31 @@ async function sendNightReport() {
     } else {
         // Détail de chaque pari du jour
         msg += `📋 *Détail des signaux:*\n\n`;
+        let gainTotal = 0;
         aujourdhui.forEach((r, i) => {
             const decision = r.prisParUtilisateur ? "✅ Pris" : "❌ Refusé";
             const resultat = r.win ? "🟢 Victoire" : "🔴 Perdu";
-            const coteAff = r.coteNextGoal ? `Cote: ${r.coteNextGoal}` : "Cote N/A";
+            const coteAff = r.coteNextGoal ? `@ ${r.coteNextGoal}` : "Cote N/A";
+
+            // Calcul rentabilité si cote disponible (base 10€)
+            if (r.prisParUtilisateur && r.coteNextGoal) {
+                gainTotal += r.win ? (r.coteNextGoal - 1) * 10 : -10;
+            }
+
             msg += `${i + 1}. *${r.home}* vs ${r.away}\n`;
             msg += `   ${decision} | ${coteAff} | Min: ${r.minuteSignal}'\n`;
-            msg += `   ${resultat}\n\n`;
+            msg += `   ${resultat}`;
+            if (r.prisParUtilisateur && r.coteNextGoal) {
+                msg += ` | ${r.win ? `+${((r.coteNextGoal - 1) * 10).toFixed(2)}€` : `-10€`}`;
+            }
+            msg += `\n\n`;
         });
+
+        if (gainTotal !== 0) {
+            msg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+            msg += `💰 *Rentabilité du jour (base 10€/pari):*\n`;
+            msg += `${gainTotal >= 0 ? `✅ +${gainTotal.toFixed(2)}€` : `❌ ${gainTotal.toFixed(2)}€`}\n\n`;
+        }
 
         msg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
         msg += `📊 *Résumé du jour:*\n`;
@@ -971,6 +987,18 @@ async function sendWeeklyReport() {
 
         msg += `❌ Paris refusés: ${refusesSemaine.length} (${refusesSemaine.filter(r => r.win).length} auraient gagné)\n\n`;
 
+        // Rentabilité semaine
+        const parisAvecCote = prisSemaine.filter(r => r.coteNextGoal);
+        if (parisAvecCote.length > 0) {
+            const gainSemaine = parisAvecCote.reduce((total, r) => {
+                return total + (r.win ? (r.coteNextGoal - 1) * 10 : -10);
+            }, 0);
+            const coteMoyenne = (parisAvecCote.reduce((a, r) => a + r.coteNextGoal, 0) / parisAvecCote.length).toFixed(2);
+            msg += `💰 *Rentabilité semaine (base 10€/pari):*\n`;
+            msg += `${gainSemaine >= 0 ? `✅ +${gainSemaine.toFixed(2)}€` : `❌ ${gainSemaine.toFixed(2)}€`}\n`;
+            msg += `📈 Cote moyenne: ${coteMoyenne}\n\n`;
+        }
+
         if (topLigues.length > 0) {
             msg += `🏆 *Ligues cette semaine:*\n`;
             topLigues.forEach(([league, stats]) => {
@@ -1027,6 +1055,35 @@ function sendMainMenu() {
 
 bot.onText(/\/menu/, (msg) => { if (!isAuthorized(msg)) return; sendMainMenu(); });
 bot.onText(/\/start/, (msg) => { if (!isAuthorized(msg)) return; bot.sendMessage(chatId, "👋 Bot démarré ! Tape /menu pour le panneau de contrôle."); });
+
+// Gestion saisie de cote après OUI
+bot.on('message', (msg) => {
+    if (!isAuthorized(msg)) return;
+    if (!pendingCote) return;
+    if (msg.text && msg.text.startsWith('/')) return; // ignorer les commandes
+
+    const cote = parseFloat(msg.text.replace(',', '.'));
+    if (isNaN(cote) || cote < 1.01 || cote > 20) {
+        bot.sendMessage(chatId, "❌ Cote invalide. Tape un nombre ex: *2.30*", { parse_mode: "Markdown" });
+        return;
+    }
+
+    // Enregistrer la cote dans le bon pari
+    const bet = pendingResults.find(b => b.fixtureId === pendingCote.fixtureId && b.prisParUtilisateur === true);
+    if (bet) {
+        bet.coteNextGoal = cote;
+    }
+
+    bot.sendMessage(chatId,
+        `✅ *Cote enregistrée: ${cote}*\n\n` +
+        `⚽ *${pendingCote.home}* marque le prochain but @ ${cote}\n\n` +
+        `Je te donnerai le résultat dès le prochain but. Bonne chance ! 🍀`,
+        { parse_mode: "Markdown" }
+    );
+
+    pendingCote = null;
+    saveData();
+});
 
 // ============================================================
 // 📝 COMMANDES
